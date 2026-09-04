@@ -203,3 +203,40 @@ func TestEmbeddingVector_Dimensions(t *testing.T) {
 		t.Errorf("expected self-similarity ~1.0, got %f", sim)
 	}
 }
+
+func TestIssueClassification_ParsingAndValidation(t *testing.T) {
+	cases := []struct {
+		input    string
+		expected IssueClassification
+		valid    bool
+	}{
+		{"code", IssueClassificationCode, true},
+		{"CODE", IssueClassificationCode, true},
+		{"software", IssueClassificationCode, true},
+		{"infra", IssueClassificationInfra, true},
+		{"infrastructure", IssueClassificationInfra, true},
+		{"hybrid", IssueClassificationHybrid, true},
+		{"both", IssueClassificationHybrid, true},
+		{"invalid", "", false},
+		{"", "", false},
+	}
+
+	for _, c := range cases {
+		classification, err := ParseIssueClassification(c.input)
+		if c.valid {
+			if err != nil {
+				t.Errorf("expected valid classification for '%s': %v", c.input, err)
+			}
+			if classification != c.expected {
+				t.Errorf("expected '%s', got '%s'", c.expected, classification)
+			}
+			if !classification.IsValid() {
+				t.Errorf("expected classification '%s' to be valid", classification)
+			}
+		} else {
+			if err == nil {
+				t.Errorf("expected error for '%s', got nil", c.input)
+			}
+		}
+	}
+}
