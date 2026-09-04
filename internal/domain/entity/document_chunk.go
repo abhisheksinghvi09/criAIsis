@@ -101,13 +101,13 @@ func ReconstituteDocumentChunk(
 	}
 }
 
-func (c *DocumentChunk) ID() uuid.UUID                  { return c.id }
-func (c *DocumentChunk) WorkspaceID() value.WorkspaceID { return c.workspaceID }
-func (c *DocumentChunk) PersonaID() uuid.UUID           { return c.personaID }
-func (c *DocumentChunk) DocumentID() uuid.UUID          { return c.documentID }
-func (c *DocumentChunk) ChunkIndex() int                { return c.chunkIndex }
-func (c *DocumentChunk) ChunkText() string              { return c.chunkText }
-func (c *DocumentChunk) TokenCount() int                { return c.tokenCount }
+func (c *DocumentChunk) ID() uuid.UUID                    { return c.id }
+func (c *DocumentChunk) WorkspaceID() value.WorkspaceID   { return c.workspaceID }
+func (c *DocumentChunk) PersonaID() uuid.UUID             { return c.personaID }
+func (c *DocumentChunk) DocumentID() uuid.UUID            { return c.documentID }
+func (c *DocumentChunk) ChunkIndex() int                  { return c.chunkIndex }
+func (c *DocumentChunk) ChunkText() string                { return c.chunkText }
+func (c *DocumentChunk) TokenCount() int                  { return c.tokenCount }
 func (c *DocumentChunk) Embedding() value.EmbeddingVector { return c.embedding }
-func (c *DocumentChunk) Metadata() json.RawMessage     { return c.metadata }
-func (c *DocumentChunk) CreatedAt() time.Time           { return c.createdAt }
+func (c *DocumentChunk) Metadata() json.RawMessage        { return c.metadata }
+func (c *DocumentChunk) CreatedAt() time.Time             { return c.createdAt }

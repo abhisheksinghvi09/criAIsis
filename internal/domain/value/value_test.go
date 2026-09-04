@@ -240,3 +240,116 @@ func TestIssueClassification_ParsingAndValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestTriggerType_Validation(t *testing.T) {
+	cases := []struct {
+		input     string
+		expected  TriggerType
+		valid     bool
+		isWebhook bool
+	}{
+		{"slash_command", TriggerTypeSlashCommand, true, false},
+		{"SLASH_COMMAND", TriggerTypeSlashCommand, true, false},
+		{"webhook", TriggerTypeWebhook, true, true},
+		{" WEBHOOK ", TriggerTypeWebhook, true, true},
+		{"manual_api", "", false, false},
+		{"", "", false, false},
+	}
+
+	for _, c := range cases {
+		tt, err := ParseTriggerType(c.input)
+		if c.valid {
+			if err != nil {
+				t.Errorf("unexpected error for '%s': %v", c.input, err)
+			}
+			if tt != c.expected {
+				t.Errorf("expected '%s', got '%s'", c.expected, tt)
+			}
+			if tt.IsWebhook() != c.isWebhook {
+				t.Errorf("expected isWebhook=%v, got %v", c.isWebhook, tt.IsWebhook())
+			}
+			if !tt.IsValid() {
+				t.Errorf("expected trigger type '%s' to be valid", tt)
+			}
+			if tt.String() != string(c.expected) {
+				t.Errorf("expected string '%s', got '%s'", c.expected, tt.String())
+			}
+		} else {
+			if err == nil {
+				t.Errorf("expected error for '%s', got nil", c.input)
+			}
+		}
+	}
+}
+
+func TestIncidentContext_Lifecycle(t *testing.T) {
+	empty := NewIncidentContext("", "", nil, nil, nil)
+	if !empty.IsEmpty() {
+		t.Error("expected context to be empty")
+	}
+	if empty.Provider() != "manual" {
+		t.Errorf("expected default provider 'manual', got '%s'", empty.Provider())
+	}
+
+	metrics := map[string]float64{"error_rate": 0.15, "latency_p99": 450.0}
+	ctx := NewIncidentContext(
+		"Grafana",
+		"High5xxErrors",
+		[]string{"HTTP 504 Gateway Timeout", "connection refused"},
+		[]string{"panic: runtime error at handler.go:42"},
+		metrics,
+	)
+
+	if ctx.IsEmpty() {
+		t.Error("expected context to not be empty")
+	}
+	if ctx.Provider() != "grafana" {
+		t.Errorf("expected provider 'grafana', got '%s'", ctx.Provider())
+	}
+	if ctx.AlertName() != "High5xxErrors" {
+		t.Errorf("expected alert name 'High5xxErrors', got '%s'", ctx.AlertName())
+	}
+	if len(ctx.ErrorLogs()) != 2 {
+		t.Errorf("expected 2 error logs, got %d", len(ctx.ErrorLogs()))
+	}
+	if len(ctx.StackTraces()) != 1 {
+		t.Errorf("expected 1 stack trace, got %d", len(ctx.StackTraces()))
+	}
+	if ctx.Metrics()["error_rate"] != 0.15 {
+		t.Errorf("expected metric error_rate=0.15, got %f", ctx.Metrics()["error_rate"])
+	}
+
+	// Test immutability via defensive copies
+	logs := ctx.ErrorLogs()
+	logs[0] = "mutated"
+	if ctx.ErrorLogs()[0] == "mutated" {
+		t.Error("defensive copy violated for error logs")
+	}
+
+	m := ctx.Metrics()
+	m["error_rate"] = 999.0
+	if ctx.Metrics()["error_rate"] == 999.0 {
+		t.Error("defensive copy violated for metrics")
+	}
+
+	// JSON serialization round-trip
+	bytes, err := ctx.MarshalJSON()
+	if err != nil {
+		t.Fatalf("failed marshaling IncidentContext: %v", err)
+	}
+
+	var restored IncidentContext
+	if err := restored.UnmarshalJSON(bytes); err != nil {
+		t.Fatalf("failed unmarshaling IncidentContext: %v", err)
+	}
+
+	if restored.Provider() != ctx.Provider() {
+		t.Errorf("provider mismatch after unmarshal: %s vs %s", restored.Provider(), ctx.Provider())
+	}
+	if restored.AlertName() != ctx.AlertName() {
+		t.Errorf("alert name mismatch after unmarshal: %s vs %s", restored.AlertName(), ctx.AlertName())
+	}
+	if len(restored.ErrorLogs()) != 2 || restored.ErrorLogs()[0] != "HTTP 504 Gateway Timeout" {
+		t.Errorf("error logs mismatch after unmarshal: %v", restored.ErrorLogs())
+	}
+}

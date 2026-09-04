@@ -15,7 +15,7 @@ var (
 	_ repository.ChunkRepository      = (*PostgresChunkRepository)(nil)
 	_ repository.IncidentRepository   = (*PostgresIncidentRepository)(nil)
 	_ repository.DebateTurnRepository = (*PostgresDebateTurnRepository)(nil)
-	_ repository.TransactionManager  = (*PostgresTxManager)(nil)
+	_ repository.TransactionManager   = (*PostgresTxManager)(nil)
 )
 
 func TestTxContext_Propagation(t *testing.T) {

@@ -53,12 +53,12 @@ func (r *PostgresWorkspaceRepository) GetByID(ctx context.Context, id value.Work
 	`
 	exec := GetExecutor(ctx, r.pool)
 	var (
-		rawID       uuid.UUID
-		teamID      string
-		teamName    string
-		tokenBytes  []byte
-		createdAt   time.Time
-		updatedAt   time.Time
+		rawID      uuid.UUID
+		teamID     string
+		teamName   string
+		tokenBytes []byte
+		createdAt  time.Time
+		updatedAt  time.Time
 	)
 
 	err := exec.QueryRow(ctx, query, id.UUID()).Scan(
@@ -92,12 +92,12 @@ func (r *PostgresWorkspaceRepository) GetBySlackTeamID(ctx context.Context, team
 	`
 	exec := GetExecutor(ctx, r.pool)
 	var (
-		rawID       uuid.UUID
-		rawTeamID   string
-		teamName    string
-		tokenBytes  []byte
-		createdAt   time.Time
-		updatedAt   time.Time
+		rawID      uuid.UUID
+		rawTeamID  string
+		teamName   string
+		tokenBytes []byte
+		createdAt  time.Time
+		updatedAt  time.Time
 	)
 
 	err := exec.QueryRow(ctx, query, teamID).Scan(

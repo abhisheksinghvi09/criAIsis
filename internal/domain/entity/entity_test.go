@@ -178,3 +178,71 @@ func TestDebateTurn_WithCitations(t *testing.T) {
 		t.Errorf("citation fields mismatch: %+v", citations[0])
 	}
 }
+
+func TestIncident_TriggerTypeAndContext(t *testing.T) {
+	wsID := value.NewWorkspaceID()
+	inc, err := NewIncident(
+		wsID,
+		"Checkout Latency Spike",
+		"504s observed at payment gateway",
+		value.SlackChannelID("C999"),
+		value.SlackThreadTS("1709512345.000100"),
+		value.SeveritySev2,
+		value.SlackUserID("U123"),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("failed creating incident: %v", err)
+	}
+
+	// Default trigger type is slash_command
+	if inc.TriggerType() != value.TriggerTypeSlashCommand {
+		t.Errorf("expected default trigger type 'slash_command', got '%s'", inc.TriggerType())
+	}
+
+	// Update to webhook
+	if err := inc.SetTriggerType(value.TriggerTypeWebhook); err != nil {
+		t.Fatalf("failed setting trigger type: %v", err)
+	}
+	if inc.TriggerType() != value.TriggerTypeWebhook {
+		t.Errorf("expected trigger type 'webhook', got '%s'", inc.TriggerType())
+	}
+
+	// Initial context should be nil
+	ctx, err := inc.IncidentContext()
+	if err != nil {
+		t.Fatalf("unexpected error getting nil incident context: %v", err)
+	}
+	if ctx != nil {
+		t.Error("expected nil incident context initially")
+	}
+
+	// Set IncidentContext
+	inContext := value.NewIncidentContext(
+		"cloudwatch",
+		"HighErrorRateAlarm",
+		[]string{"Task timed out after 15.00 seconds"},
+		[]string{"main.go:88"},
+		map[string]float64{"Errors": 42.0},
+	)
+	if err := inc.SetIncidentContext(inContext); err != nil {
+		t.Fatalf("failed setting incident context: %v", err)
+	}
+
+	retrievedCtx, err := inc.IncidentContext()
+	if err != nil {
+		t.Fatalf("failed retrieving incident context: %v", err)
+	}
+	if retrievedCtx == nil {
+		t.Fatal("expected non-nil retrieved context")
+	}
+	if retrievedCtx.Provider() != "cloudwatch" {
+		t.Errorf("expected provider 'cloudwatch', got '%s'", retrievedCtx.Provider())
+	}
+	if retrievedCtx.AlertName() != "HighErrorRateAlarm" {
+		t.Errorf("expected alert name 'HighErrorRateAlarm', got '%s'", retrievedCtx.AlertName())
+	}
+	if len(retrievedCtx.ErrorLogs()) != 1 {
+		t.Errorf("expected 1 error log, got %d", len(retrievedCtx.ErrorLogs()))
+	}
+}

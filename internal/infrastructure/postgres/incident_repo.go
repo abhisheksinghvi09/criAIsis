@@ -152,19 +152,19 @@ func (r *PostgresIncidentRepository) Update(ctx context.Context, inc *entity.Inc
 
 func (r *PostgresIncidentRepository) scanIncident(row pgx.Row) (*entity.Incident, error) {
 	var (
-		id           uuid.UUID
-		rawWsID      uuid.UUID
-		title        string
-		description  string
-		channelID    string
-		threadTS     string
-		rawSeverity  string
-		rawStatus    string
-		creatorID    string
-		metadata     json.RawMessage
-		resolvedAt   *time.Time
-		createdAt    time.Time
-		updatedAt    time.Time
+		id          uuid.UUID
+		rawWsID     uuid.UUID
+		title       string
+		description string
+		channelID   string
+		threadTS    string
+		rawSeverity string
+		rawStatus   string
+		creatorID   string
+		metadata    json.RawMessage
+		resolvedAt  *time.Time
+		createdAt   time.Time
+		updatedAt   time.Time
 	)
 
 	err := row.Scan(

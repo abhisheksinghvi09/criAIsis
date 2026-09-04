@@ -40,9 +40,9 @@ type ServerConfig struct {
 // SlackConfig holds OAuth application credentials and token encryption keys.
 // The bot token encryption key must be an exact 32-byte secret for AES-GCM-256 cipher operations.
 type SlackConfig struct {
-	ClientID               string `koanf:"client_id" validate:"required"`
-	ClientSecret           string `koanf:"client_secret" validate:"required"`
-	SigningSecret          string `koanf:"signing_secret" validate:"required"`
+	ClientID              string `koanf:"client_id" validate:"required"`
+	ClientSecret          string `koanf:"client_secret" validate:"required"`
+	SigningSecret         string `koanf:"signing_secret" validate:"required"`
 	BotTokenEncryptionKey string `koanf:"bot_token_encryption_key" validate:"required,len=32"`
 }
 

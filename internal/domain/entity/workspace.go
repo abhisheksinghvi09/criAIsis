@@ -69,12 +69,12 @@ func ReconstituteWorkspace(
 	}, nil
 }
 
-func (w *Workspace) ID() value.WorkspaceID              { return w.id }
-func (w *Workspace) SlackTeamID() string               { return w.slackTeamID }
-func (w *Workspace) SlackTeamName() string             { return w.slackTeamName }
-func (w *Workspace) SlackBotTokenEncrypted() []byte    { return w.slackBotTokenEncrypted }
-func (w *Workspace) CreatedAt() time.Time              { return w.createdAt }
-func (w *Workspace) UpdatedAt() time.Time              { return w.updatedAt }
+func (w *Workspace) ID() value.WorkspaceID          { return w.id }
+func (w *Workspace) SlackTeamID() string            { return w.slackTeamID }
+func (w *Workspace) SlackTeamName() string          { return w.slackTeamName }
+func (w *Workspace) SlackBotTokenEncrypted() []byte { return w.slackBotTokenEncrypted }
+func (w *Workspace) CreatedAt() time.Time           { return w.createdAt }
+func (w *Workspace) UpdatedAt() time.Time           { return w.updatedAt }
 
 // UpdateTeamName applies a name change (e.g. workspace rename in Slack).
 func (w *Workspace) UpdateTeamName(name string) error {
