@@ -6,6 +6,7 @@ CREATE TABLE incidents (
     description TEXT NOT NULL,
     slack_channel_id VARCHAR(64) NOT NULL,
     slack_thread_ts VARCHAR(64) NOT NULL,
+    severity VARCHAR(32) NOT NULL DEFAULT 'sev-2',
     status VARCHAR(32) NOT NULL DEFAULT 'investigating',
     created_by_slack_user_id VARCHAR(64) NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}',
@@ -16,6 +17,7 @@ CREATE TABLE incidents (
 );
 
 CREATE INDEX idx_incidents_workspace_status ON incidents(workspace_id, status, created_at DESC);
+CREATE INDEX idx_incidents_workspace_severity ON incidents(workspace_id, severity, created_at DESC);
 
 CREATE TRIGGER set_updated_at_incidents
     BEFORE UPDATE ON incidents
@@ -39,4 +41,3 @@ CREATE TABLE debate_turns (
 
 CREATE INDEX idx_debate_turns_incident_order ON debate_turns(incident_id, created_at ASC);
 CREATE INDEX idx_debate_turns_workspace_created ON debate_turns(workspace_id, created_at DESC);
-

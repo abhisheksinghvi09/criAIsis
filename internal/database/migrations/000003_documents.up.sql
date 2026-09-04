@@ -6,11 +6,14 @@ CREATE TABLE documents (
     title VARCHAR(255) NOT NULL,
     raw_content TEXT NOT NULL,
     content_hash VARCHAR(64) NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'pending',
+    chunk_count INT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_documents_workspace_persona ON documents(workspace_id, persona_id);
+CREATE INDEX idx_documents_workspace_status ON documents(workspace_id, status);
 CREATE INDEX idx_documents_hash ON documents(workspace_id, content_hash);
 
 CREATE TRIGGER set_updated_at_documents
@@ -38,4 +41,3 @@ CREATE INDEX idx_chunks_embedding_hnsw ON document_chunks
 USING hnsw (embedding vector_cosine_ops)
 WITH (m = 16, ef_construction = 64);
 CREATE INDEX idx_chunks_tsv ON document_chunks USING gin(tsv);
-
