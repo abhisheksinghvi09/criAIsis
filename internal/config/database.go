@@ -7,6 +7,8 @@ import (
 	"strconv"
 )
 
+// DatabaseConfig encapsulates PostgreSQL connection and pool parameters.
+// Struct tags declare koanf unmarshal keys and validation requirements.
 type DatabaseConfig struct {
 	Host            string `koanf:"host" validate:"required"`
 	Port            int    `koanf:"port" validate:"required"`
@@ -20,6 +22,8 @@ type DatabaseConfig struct {
 	ConnMaxIdleTime int    `koanf:"conn_max_idle_time" validate:"required"`
 }
 
+// DSN formats a standard, URL-safe PostgreSQL connection string.
+// Passwords with special characters (e.g. '@', ':', '/') are safely escaped to prevent connection parse failures.
 func (d DatabaseConfig) DSN() string {
 	hostPort := net.JoinHostPort(d.Host, strconv.Itoa(d.Port))
 	encodedPassword := url.QueryEscape(d.Password)
