@@ -5,12 +5,12 @@
 
 ---
 
-## 2. Product Philosophy: Investigative Detective, Never Autonomous Remediation
+### 2. Product Philosophy: Investigative Detective, Never Autonomous Remediation
 
 A foundational boundary of criAIsis is:
 > **The Agent's Role is Deep Read-Only Diagnostic Investigation, NEVER Blind Autonomous Production Remediation.**
 
-The agent is an **investigative detective**, not a reckless operator. It does not touch production buttons, modify configurations, or execute destructive mutations. Instead, with optional read-only permissions (via APIs or Model Context Protocol / MCP), it rapidly answers the three core questions incident commanders spend 45 minutes investigating:
+The agent is an **investigative detective**, not a reckless operator. It does not touch production buttons, modify configurations, or execute destructive mutations. Instead, utilizing structured alert telemetry (ingested from Grafana, CloudWatch, Datadog), grounded runbooks, and scoped read-only diagnostic tool adapters (via Model Context Protocol / MCP or read-only APIs), it rapidly answers the three core questions incident commanders spend 45 minutes investigating:
 1. **Which specific logs and error stack traces are failing?**
 2. **Which department/team owns the problem?** (Network vs. Database vs. Application vs. Security)
 3. **What is the root-cause classification?** Is it an **Infrastructure issue**, a **Code-level regression**, or **Both (Hybrid)**?
@@ -30,25 +30,28 @@ Rather than running slow, sequential turn-by-turn debate rounds (which take 60�
                          ┌───────────────────────────────────────────────────┐
                          │              The 2-Stage Clash Model               │
                          └───────────────────────────────────────────────────┘
-                                                  │
-                                                  ▼
+                                                   │
+                                                   ▼
+    [Ingress: Alert Webhook (Logs + Metrics) OR Slack Slash Command]
+                                                   │
+                                                   ▼
    [Stage 1: Parallel Blast (~6-8s)]                             [Stage 2: Cross-Rebuttal (~8-10s)]
   ┌─────────────────────────────────┐                           ┌──────────────────────────────────┐
-  │ Network Agent (RAG: Net docs)   │───┐                       │ Cross-Domain Synthesis           │
+  │ Network Agent (RAG + Net Logs)  │───┐                       │ Cross-Domain Synthesis           │
   ├─────────────────────────────────┤   │                       │                                  │
-  │ DB Agent      (RAG: DB docs)    │───┼──► [Transcript Log] ──► "DB Agent suspects locks, but   │
+  │ DB Agent      (RAG + DB Logs)   │───┼──► [Transcript Log] ──► "DB Agent suspects locks, but   │
   ├─────────────────────────────────┤   │                       │  Network Agent shows 80% packet  │
-  │ App Agent     (RAG: App docs)   │───┤                       │  drop between AZ-a and AZ-b.     │
+  │ App Agent     (RAG + Traces)    │───┤                       │  drop between AZ-a and AZ-b.     │
   ├─────────────────────────────────┤   │                       │  Root Cause: Upstream Gateway."  │
-  │ Security Agent(RAG: Sec docs)   │───┘                       └──────────────────────────────────┘
+  │ Security Agent(RAG + Auth Logs) │───┘                       └──────────────────────────────────┘
   └─────────────────────────────────┘                                            │
                                                                                  ▼
                                                                   [Slack Thread + IC Summary]
 ```
 
-1. **Stage 1 — Parallel Hypotheses (<10s):** The 4 domain specialist agents (Network, Database, Application, Security) execute RAG retrieval against their respective runbook chunks concurrently via Go goroutines, formulating initial domain assessments.
-2. **Stage 2 — Cross-Rebuttal & IC Consensus Synthesis (<15s):** An orchestrator agent cross-examines the Stage 1 outputs, highlights contradictions (e.g., "DB claims deadlock, but Network shows 90% packet drops upstream"), and produces a synthesized Incident Commander (IC) hypothesis with cited document excerpts and root-cause classification (Code, Infra, or Hybrid).
-3. **Stage 3 (Interactive Follow-up):** The IC can `@mention` any specific persona in the Slack thread (`@criaisis @database why are connections spiking?`) for targeted deep dives. The agent provides runbook-grounded diagnostics and exact copy-paste diagnostic queries for human execution.
+1. **Stage 1 — Parallel Hypotheses (<10s):** The 4 domain specialist agents (Network, Database, Application, Security) concurrently analyze the incident context (error stack traces, log lines, metric spikes) alongside their respective runbook chunks via Go goroutines, formulating initial domain assessments.
+2. **Stage 2 — Cross-Rebuttal & IC Consensus Synthesis (<15s):** An orchestrator agent cross-examines the Stage 1 outputs, highlights contradictions (e.g., "DB claims deadlock, but Network shows 90% packet drops upstream"), and produces a synthesized Incident Commander (IC) hypothesis with cited document excerpts, exact safe copy-paste diagnostic queries, and root-cause classification (Code, Infra, or Hybrid).
+3. **Stage 3 (Interactive Follow-up & MCP Probing):** The IC can `@mention` any specific persona in the Slack thread (`@criaisis @database why are connections spiking?`) for targeted deep dives. Specialists can invoke scoped read-only diagnostic tools (via MCP) or provide safe diagnostic queries for human execution.
 
 ---
 
@@ -57,6 +60,7 @@ Rather than running slow, sequential turn-by-turn debate rounds (which take 60�
 | Principle | Decision | Rationale |
 |---|---|---|
 | **Multi-Tenancy from Day 1** | Schema-level `workspace_id` scoping on every table + Repository-level filtering | Ensures zero data leakage between customer Slack workspaces. Enforced at compile time via typed `value.WorkspaceID`. |
+| **The Brain vs The Hands** | Native Go orchestrator for clash logic; external tools as read-only MCP adapters | Avoids slow, non-deterministic agent loops like OpenSRE as the core runtime, while allowing clean integration with telemetry sources. |
 | **Lean Concurrency** | Go worker channels (`chan IncidentJob`) fulfilling a clean `JobQueue` interface | Removes Redis cluster deployment and operational moving parts for MVP, while preserving zero-cost migration to Redis when scaling. |
 | **Unified Data Store** | PostgreSQL 16 with `pgvector` | Relational data (workspaces, personas, incidents, transcripts) and vector embeddings (`vector(1536)`) reside in one database with HNSW and GIN hybrid indexing. |
 | **Hybrid UI Surface** | Slack for live incidents; Lean React dashboard strictly for Runbooks & Transcripts | Live firefighting stays where engineers already are (Slack). The web dashboard is focused on runbook uploads and audit transcript reviews. |
@@ -67,13 +71,20 @@ Rather than running slow, sequential turn-by-turn debate rounds (which take 60�
 
 ## 5. MVP Scope Definition
 
-### In-Scope (MVP)
+#### In-Scope (MVP)
 * **Slack App (Bot + Slash Commands):**
   * OAuth 2.0 install flow with encrypted bot token storage (AES-GCM-256).
   * `/criaisis investigate <incident description>`: Acknowledges in <500ms, enqueues debate, posts in thread.
   * 2-Stage parallel debate output formatted with Slack Block Kit.
   * In-thread `@mention` follow-up routing to specific specialist personas.
   * `/criaisis resolve`: Marks incident resolved, locks transcript, timestamps resolution.
+* **Automated Alert Webhook Ingestion:**
+  * `POST /api/v1/integrations/alerts/:provider` supporting Grafana Alerting and AWS CloudWatch Alarms/SNS.
+  * Parses error stack traces, log lines, and metric anomaly tags into structured `IncidentContext`.
+  * Auto-creates incident and launches 2-Stage Clash directly into designated Slack channel.
+* **Read-Only Diagnostic Tool Adapter Contract (MCP):**
+  * Go interface for Model Context Protocol (MCP) and telemetry tool adapters.
+  * Allows personas to query metrics (Prometheus, CloudWatch) with hard 5s timeouts and strict zero-mutation guarantees.
 * **Specialist Personas (4 Fixed):**
   * `network`: Routing, DNS, load balancers, CDN, egress/ingress.
   * `database`: Connection pools, query locks, replication lag, I/O bottlenecks.
@@ -92,6 +103,7 @@ Rather than running slow, sequential turn-by-turn debate rounds (which take 60�
 
 ### Out of Scope (Ruthlessly Cut for MVP)
 * [-] **No Autonomous Remediation:** Agent never applies mutations or restarts pods in production.
+* [-] **No External SRE Agent Runtimes:** No embedding heavy autonomous agent daemons (e.g. OpenSRE as core runtime). Tools like OpenSRE are supported strictly as read-only telemetry adapters.
 * [-] **No Redis Cluster:** In-process Go worker pool handles MVP job queuing.
 * [-] **No Vanity Analytics Charts:** No MTTR, incidents/week, or document usage charts.
 * [-] **No Custom Personas:** Exactly 4 fixed domain personas.
@@ -99,32 +111,35 @@ Rather than running slow, sequential turn-by-turn debate rounds (which take 60�
 
 ---
 
-## 6. Dev Environment Incident Simulation & Debugging Framework
+## 6. Dev Environment Incident Simulation & Sandbox Reproduction Framework
 
-To verify the multi-agent clash and diagnostic classification without requiring a live production outage, criAIsis includes a **Local Incident Simulation Framework**:
+To verify the multi-agent clash and diagnostic classification without requiring a live production outage, criAIsis includes a **Local Incident Simulation & Sandbox Reproduction Framework**:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│               Local Dev Incident Simulation Framework                  │
+│        Local Dev Incident Simulation & Sandbox Reproduction            │
 ├────────────────────────────────┬───────────────────────────────────────┤
 │ Scenario Fixtures              │ Execution Mode                        │
 │ - checkout_spike.json          │ Taskfile Command:                     │
 │ - db_connection_exhaustion.json│ $ task incident:simulate -- scenario= │
 │ - pod_oom_kill.json            │   db_connection_exhaustion            │
 ├────────────────────────────────┴───────────────────────────────────────┤
-│ Verification Pipeline:                                                 │
+│ Verification & Reproduction Pipeline:                                  │
 │ 1. Seeds local Docker pgvector with scenario runbooks                 │
-│ 2. Fires simulated slash command via CLI / HTTP handler                │
+│ 2. Injects simulated webhook payload or slash command context          │
 │ 3. Asserts Stage 1 specialist hypotheses generate valid citations      │
 │ 4. Asserts Stage 2 synthesizer detects correct root-cause (Code/Infra) │
 │ 5. Validates thread persistence in local debate_turns table            │
+│ 6. (Sandbox Pipeline) Spawns isolated local container state to         │
+│    reproduce failure conditions safely without production risk         │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-This simulation framework allows developers to:
+This framework allows developers and SREs to:
 1. Reproduce and step through complex multi-agent debates with deterministic mock inputs.
-2. Benchmark synthesis prompt accuracy across various failure scenarios (pure infra, pure code, hybrid).
-3. Debug prompt regressions and test new LLM provider integrations locally.
+2. Safely recreate failure conditions in isolated dev/staging sandboxes to verify hypotheses and validate prospective fixes.
+3. Benchmark synthesis prompt accuracy across various failure scenarios (pure infra, pure code, hybrid).
+4. Debug prompt regressions and test new LLM provider integrations locally.
 
 ---
 

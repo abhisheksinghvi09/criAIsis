@@ -195,12 +195,12 @@
 **Description:** Implement `WorkspaceRepository` and `PersonaRepository` using `pgx/v5`, mapping between domain entities and SQL rows, and including automatic seeding of the 4 default personas for new workspaces.
 
 **Acceptance criteria:**
-- [ ] Workspace creation and retrieval work with encrypted bot tokens.
-- [ ] Persona retrieval by key and list by workspace enforce `workspace_id`.
-- [ ] Default 4 personas (`network`, `database`, `application`, `security`) are seeded on workspace initialization.
+- [x] Workspace creation and retrieval work with encrypted bot tokens.
+- [x] Persona retrieval by key and list by workspace enforce `workspace_id`.
+- [x] Default 4 personas (`network`, `database`, `application`, `security`) are seeded on workspace initialization.
 
 **Verification:**
-- [ ] Tests pass: `go test -v ./internal/infrastructure/postgres/...`
+- [x] Tests pass: `go test -v ./internal/infrastructure/postgres/...`
 
 **Dependencies:** Tasks 4, 7
 
@@ -218,12 +218,12 @@
 **Description:** Implement `DocumentRepository` and `ChunkRepository` with batch insertion and parameterized cosine similarity search scoped by `workspace_id` and `persona_id`.
 
 **Acceptance criteria:**
-- [ ] `CreateBatch` efficiently inserts document chunks in a single transaction.
-- [ ] `SearchSimilar` executes `1 - (embedding <=> $1) AS similarity_score` filtered by `workspace_id = $2 AND persona_id = $3`.
-- [ ] Returns top-K results sorted by cosine distance ascending.
+- [x] `CreateBatch` efficiently inserts document chunks in a single transaction.
+- [x] `SearchSimilar` executes `1 - (embedding <=> $1) AS similarity_score` filtered by `workspace_id = $2 AND persona_id = $3`.
+- [x] Returns top-K results sorted by cosine distance ascending.
 
 **Verification:**
-- [ ] Tests pass: Vector insertion and similarity query integration test returns expected nearest neighbors.
+- [x] Tests pass: Vector insertion and similarity query integration test returns expected nearest neighbors.
 
 **Dependencies:** Tasks 4, 7
 
@@ -241,12 +241,12 @@
 **Description:** Implement `IncidentRepository` and `DebateTurnRepository`, supporting incident creation, status transition (`investigating` -> `resolved`), thread lookup, and turn history insertion with referenced chunk IDs.
 
 **Acceptance criteria:**
-- [ ] `GetBySlackThread` returns active incident for channel and thread timestamp.
-- [ ] `Resolve` updates status to `resolved` and sets `resolved_at = NOW()`.
-- [ ] `DebateTurnRepository.ListByIncident` returns turns in chronological sequence.
+- [x] `GetBySlackThread` returns active incident for channel and thread timestamp.
+- [x] `Resolve` updates status to `resolved` and sets `resolved_at = NOW()`.
+- [x] `DebateTurnRepository.ListByIncident` returns turns in chronological sequence.
 
 **Verification:**
-- [ ] Tests pass: Incident and debate turn repository integration tests pass.
+- [x] Tests pass: Incident and debate turn repository integration tests pass.
 
 **Dependencies:** Tasks 4, 7
 
@@ -264,12 +264,12 @@
 **Description:** Create automated integration tests that simulate two distinct workspaces (`ws-alpha` and `ws-beta`), ingest documents into both, and verify that vector search, document retrieval, and incident listings never leak across tenant boundaries.
 
 **Acceptance criteria:**
-- [ ] Vector search with `ws-alpha` token embedding never returns chunks belonging to `ws-beta`.
-- [ ] Querying incidents with `ws-alpha` never returns `ws-beta` incidents.
-- [ ] Cross-persona search within the same workspace never returns chunks from another persona.
+- [x] Vector search with `ws-alpha` token embedding never returns chunks belonging to `ws-beta`.
+- [x] Querying incidents with `ws-alpha` never returns `ws-beta` incidents.
+- [x] Cross-persona search within the same workspace never returns chunks from another persona.
 
 **Verification:**
-- [ ] Tests pass: `go test -v -run TestTenantIsolation ./internal/infrastructure/postgres/...`
+- [x] Tests pass: `go test -v -run TestTenantIsolation ./internal/infrastructure/postgres/...`
 
 **Dependencies:** Tasks 8, 9, 10
 
@@ -281,8 +281,118 @@
 ---
 
 ## Checkpoint: Complete Foundation
-- [ ] All migrations apply and rollback cleanly
-- [ ] 100% of domain value objects and entities covered by tests
-- [ ] All PostgreSQL repositories implemented and pass integration tests
-- [ ] Multi-tenant isolation verified with zero cross-tenant leakage
+- [x] All migrations apply and rollback cleanly
+- [x] 100% of domain value objects and entities covered by tests
+- [x] All PostgreSQL repositories implemented and pass integration tests
+- [x] Multi-tenant isolation verified with zero cross-tenant leakage
+
+---
+
+## Task 12: Scenario Fixtures for Incident Simulation
+
+**Description:** Create deterministic JSON test fixtures representing common failure modes (`db_connection_exhaustion.json`, `checkout_packet_loss.json`, `oom_crashloop.json`), including runbook markdown, simulated error logs, stack traces, and ground-truth root cause classifications.
+
+**Acceptance criteria:**
+- [ ] Scenario fixtures include runbook excerpts for all 4 personas.
+- [ ] Fixtures provide expected consensus classification (`Code-Level`, `Infrastructure`, `Hybrid`).
+
+**Verification:**
+- [ ] JSON fixtures validate against schema.
+
+**Dependencies:** Task 11
+
+**Files likely touched:**
+- `testdata/scenarios/db_connection_exhaustion.json`
+- `testdata/scenarios/checkout_packet_loss.json`
+
+**Estimated scope:** Small (2-3 files)
+
+---
+
+## Task 13: Local Incident Simulation Runner
+
+**Description:** Implement `task incident:simulate` CLI runner that seeds scenario runbooks, executes the 2-Stage Clash against simulated alerts, and asserts diagnostic classifications.
+
+**Acceptance criteria:**
+- [ ] Command runs end-to-end simulation in dev environment.
+- [ ] Validates Stage 1 specialist citations and Stage 2 consensus classification against fixture expectations.
+
+**Verification:**
+- [ ] Run `task incident:simulate -- scenario=db_connection_exhaustion` succeeds.
+
+**Dependencies:** Task 12
+
+**Files likely touched:**
+- `cmd/simulate/main.go`
+- `Taskfile.yml`
+
+**Estimated scope:** Medium (2 files)
+
+---
+
+## Task 14: Dev / Sandbox Incident Reproduction Pipeline
+
+**Description:** Implement sandbox reproduction pipeline allowing engineers to recreate incident failure states (synthetic load, injected latency, simulated DB connection saturation) in isolated dev containers to test hypotheses safely.
+
+**Acceptance criteria:**
+- [ ] Sandbox script boots isolated Docker container reproducing incident conditions.
+- [ ] Specialist agents can verify resolution in sandbox without touching production.
+
+**Verification:**
+- [ ] Automated container test passes locally.
+
+**Dependencies:** Task 13
+
+**Files likely touched:**
+- `scripts/sandbox_reproduce.sh`
+- `deployments/docker-compose.sandbox.yml`
+
+**Estimated scope:** Medium (2-3 files)
+
+---
+
+## Task 15: Observability Alert Webhook Ingestion Handler
+
+**Description:** Implement `AlertHandler` and router for `POST /api/v1/integrations/alerts/:provider` supporting Grafana Alerting and AWS CloudWatch SNS webhooks, extracting logs, stack traces, and metrics into `IncidentContext`.
+
+**Acceptance criteria:**
+- [ ] Webhook signature verification succeeds for supported providers.
+- [ ] Ingests alert payload and creates incident with `trigger_type = 'webhook'`.
+- [ ] Enqueues clash job to worker queue.
+
+**Verification:**
+- [ ] Unit & integration tests pass with sample Grafana and CloudWatch payloads.
+
+**Dependencies:** Task 10
+
+**Files likely touched:**
+- `internal/handler/alert_handler.go`
+- `internal/handler/alert_handler_test.go`
+- `internal/domain/entity/incident_context.go`
+
+**Estimated scope:** Medium (3 files)
+
+---
+
+## Task 16: Read-Only Diagnostic Tool Adapter Contract (MCP)
+
+**Description:** Define Go interface contract for Model Context Protocol (MCP) and read-only telemetry adapters (Prometheus, CloudWatch Logs, K8s read-only), enforcing 5s timeouts and strict zero-mutation guarantees.
+
+**Acceptance criteria:**
+- [ ] Interface defines `ExecuteDiagnosticQuery(ctx, toolName, params) (QueryResult, error)`.
+- [ ] Zero write/mutation methods permitted in interface.
+- [ ] Implements graceful degradation when telemetry endpoint is slow or unreachable.
+
+**Verification:**
+- [ ] Unit tests verify mock adapter query execution and timeout cancellation.
+
+**Dependencies:** Task 15
+
+**Files likely touched:**
+- `internal/domain/repository/diagnostic_tool.go`
+- `internal/infrastructure/telemetry/mcp_adapter.go`
+- `internal/infrastructure/telemetry/mcp_adapter_test.go`
+
+**Estimated scope:** Medium (3 files)
+
 

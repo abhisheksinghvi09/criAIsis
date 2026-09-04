@@ -22,7 +22,9 @@ criAIsis is a multi-tenant AI incident debate engine running inside Slack thread
 - **Incident Severity Tiers**: Native 4-tier severity model (`sev-1` through `sev-4`) indexed for fast multi-tenant filtering.
 - **Micro-Batch Document Ingestion**: Explicit ingestion status (`pending`, `indexed`, `failed`) and chunk counts to support non-blocking background workers.
 - **Hybrid Citations**: Relational `referenced_chunk_ids UUID[]` plus immutable `CitationSnapshot` in `metadata JSONB` for permanent post-mortem auditability.
-- **Local Incident Simulation & Debugging Framework**: Dev-environment incident reproduction pipeline using scenario fixtures (e.g. `testdata/scenarios/db_connection_exhaustion.json`) and Taskfile command `task incident:simulate` to verify the multi-agent clash and consensus without production outages.
+- **Automated Alert Ingestion**: Dedicated webhook endpoints (`POST /api/v1/integrations/alerts/:provider`) parsing Grafana and CloudWatch alert payloads into structured `IncidentContext` value objects.
+- **Read-Only Diagnostic Tool Adapters (MCP)**: Pluggable Model Context Protocol interface contracts enabling specialist personas to query metrics (Prometheus, CloudWatch) with strict 5s timeouts and zero write mutations.
+- **Local Incident Simulation & Sandbox Reproduction Framework**: Dev-environment incident reproduction pipeline using scenario fixtures (e.g. `testdata/scenarios/db_connection_exhaustion.json`) and Taskfile command `task incident:simulate` to verify the multi-agent clash and consensus without production outages, plus isolated container sandbox replay.
 
 ---
 
@@ -49,16 +51,21 @@ criAIsis is a multi-tenant AI incident debate engine running inside Slack thread
 - [x] Domain layer has zero external framework or database driver dependencies (pure Go standard library + UUID)
 
 ### Phase 3: Repository Implementation & Multi-Tenant Integration Tests
-- [ ] Task 8: Implement PostgreSQL repository for workspaces and personas (`internal/infrastructure/postgres`)
-- [ ] Task 9: Implement PostgreSQL repository for documents and pgvector chunks (including RRF `SearchHybrid`)
-- [ ] Task 10: Implement PostgreSQL repository for incidents and debate turns
-- [ ] Task 11: Implement `TransactionManager` and integration tests verifying cross-tenant isolation
+- [x] Task 8: Implement PostgreSQL repository for workspaces and personas (`internal/infrastructure/postgres`)
+- [x] Task 9: Implement PostgreSQL repository for documents and pgvector chunks (including RRF `SearchHybrid`)
+- [x] Task 10: Implement PostgreSQL repository for incidents and debate turns
+- [x] Task 11: Implement `TransactionManager` and integration tests verifying cross-tenant isolation
 
 ### Checkpoint: Complete Foundation
-- [ ] All unit and repository integration tests pass
-- [ ] Cross-tenant data leakage tests explicitly verify isolation
-- [ ] Vector similarity search query verifies persona and workspace scoping
+- [x] All unit and repository integration tests pass
+- [x] Cross-tenant data leakage tests explicitly verify isolation
+- [x] Vector similarity search query verifies persona and workspace scoping
 
-### Phase 4: Local Incident Simulation & Debugging Framework (Post-Repository)
+### Phase 4: Local Incident Simulation & Sandbox Reproduction Framework
 - [ ] Task 12: Define scenario fixtures for common failure modes (`db_connection_exhaustion.json`, `checkout_packet_loss.json`)
 - [ ] Task 13: Implement `task incident:simulate` command stepping through Stage 1, Stage 2, and Stage 3 with diagnostic assertions
+- [ ] Task 14: Implement isolated dev/sandbox reproduction pipeline for replaying incident parameters in local test containers
+
+### Phase 5: Observability Ingestion & Diagnostic Tool Adapters (MCP)
+- [ ] Task 15: Implement `IncidentContext` entity and `AlertHandler` for Grafana and AWS CloudWatch webhooks
+- [ ] Task 16: Define `DiagnosticTool` / MCP interface contract for scoped read-only telemetry probing in Stage 1
