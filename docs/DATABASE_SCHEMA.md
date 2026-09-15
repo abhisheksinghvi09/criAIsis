@@ -72,11 +72,14 @@ CREATE TABLE documents (
     title VARCHAR(255) NOT NULL,
     raw_content TEXT NOT NULL,
     content_hash VARCHAR(64) NOT NULL, -- SHA-256 hash for deduplication
+    status VARCHAR(32) NOT NULL DEFAULT 'pending', -- 'pending', 'indexed', 'failed'
+    chunk_count INT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_documents_workspace_persona ON documents(workspace_id, persona_id);
+CREATE INDEX idx_documents_workspace_status ON documents(workspace_id, status);
 CREATE INDEX idx_documents_hash ON documents(workspace_id, content_hash);
 
 -- 5. Document Chunks with Vector Embeddings & Hybrid Full-Text Search
@@ -113,9 +116,10 @@ CREATE TABLE incidents (
     description TEXT NOT NULL,
     slack_channel_id VARCHAR(64) NOT NULL,
     slack_thread_ts VARCHAR(64) NOT NULL,
+    severity VARCHAR(32) NOT NULL DEFAULT 'sev-2', -- 'sev-1', 'sev-2', 'sev-3', 'sev-4'
     status VARCHAR(32) NOT NULL DEFAULT 'investigating', -- 'investigating', 'resolved'
     created_by_slack_user_id VARCHAR(64) NOT NULL,
-    metadata JSONB NOT NULL DEFAULT '{}', -- Extension slot: channel name, initial severity tags
+    metadata JSONB NOT NULL DEFAULT '{}', -- Extension slot: channel name, root-cause tags (Code/Infra/Hybrid)
     resolved_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -123,6 +127,7 @@ CREATE TABLE incidents (
 );
 
 CREATE INDEX idx_incidents_workspace_status ON incidents(workspace_id, status, created_at DESC);
+CREATE INDEX idx_incidents_workspace_severity ON incidents(workspace_id, severity, created_at DESC);
 
 -- 7. Debate Turns (Debate Messages & Excerpt Citations)
 CREATE TABLE debate_turns (
@@ -135,7 +140,7 @@ CREATE TABLE debate_turns (
     content TEXT NOT NULL,
     referenced_chunk_ids UUID[] NOT NULL DEFAULT '{}',
     slack_message_ts VARCHAR(64),
-    metadata JSONB NOT NULL DEFAULT '{}', -- Extension slot: model version, prompt/completion tokens, latency ms
+    metadata JSONB NOT NULL DEFAULT '{}', -- Extension slot: CitationSnapshot slice, model version, tokens, latency ms
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -324,6 +329,33 @@ const (
 	TurnTypeFollowUp             TurnType = "follow_up"
 )
 
+// Severity classifies the operational impact of an incident (sev-1 through sev-4).
+type Severity string
+
+const (
+	SeveritySev1 Severity = "sev-1"
+	SeveritySev2 Severity = "sev-2"
+	SeveritySev3 Severity = "sev-3"
+	SeveritySev4 Severity = "sev-4"
+)
+
+// DocumentStatus tracks the asynchronous ingestion lifecycle of runbooks.
+type DocumentStatus string
+
+const (
+	DocumentStatusPending DocumentStatus = "pending"
+	DocumentStatusIndexed DocumentStatus = "indexed"
+	DocumentStatusFailed  DocumentStatus = "failed"
+)
+
+// CitationSnapshot preserves immutable runbook evidence inside DebateTurn metadata JSONB.
+type CitationSnapshot struct {
+	ChunkID       uuid.UUID `json:"chunk_id"`
+	DocumentTitle string    `json:"document_title"`
+	Snippet       string    `json:"snippet"`
+	Source        string    `json:"source,omitempty"`
+}
+
 // EmbeddingVector represents a 1536-dimensional vector embedding.
 type EmbeddingVector []float32
 
@@ -376,6 +408,8 @@ type Document struct {
 	title       string
 	rawContent  string
 	contentHash string
+	status      value.DocumentStatus
+	chunkCount  int
 	createdAt   time.Time
 	updatedAt   time.Time
 }
@@ -400,9 +434,10 @@ type Incident struct {
 	description        string
 	slackChannelID     value.SlackChannelID
 	slackThreadTS      value.SlackThreadTS
+	severity           value.Severity
 	status             value.IncidentStatus
 	createdBySlackUser value.SlackUserID
-	metadata           json.RawMessage // JSONB extension slot
+	metadata           json.RawMessage // JSONB extension slot: root-cause classification (Code/Infra/Hybrid)
 	resolvedAt         *time.Time
 	createdAt          time.Time
 	updatedAt          time.Time

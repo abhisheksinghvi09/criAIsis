@@ -156,3 +156,65 @@ func (i *Incident) Resolve(resolvedAt time.Time) error {
 	i.updatedAt = resolvedAt
 	return nil
 }
+
+// TriggerType returns how the incident was initiated, defaulting to slash_command.
+func (i *Incident) TriggerType() value.TriggerType {
+	var meta struct {
+		TriggerType string `json:"trigger_type"`
+	}
+	if len(i.metadata) > 0 && json.Unmarshal(i.metadata, &meta) == nil && meta.TriggerType != "" {
+		if tt, err := value.ParseTriggerType(meta.TriggerType); err == nil {
+			return tt
+		}
+	}
+	return value.TriggerTypeSlashCommand
+}
+
+// SetTriggerType updates the trigger type in incident metadata.
+func (i *Incident) SetTriggerType(tt value.TriggerType) error {
+	if !tt.IsValid() {
+		return fmt.Errorf("invalid trigger type: '%s'", tt)
+	}
+	meta := make(map[string]any)
+	if len(i.metadata) > 0 {
+		_ = json.Unmarshal(i.metadata, &meta)
+	}
+	meta["trigger_type"] = tt.String()
+	bytes, err := json.Marshal(meta)
+	if err != nil {
+		return err
+	}
+	i.metadata = bytes
+	i.updatedAt = time.Now().UTC()
+	return nil
+}
+
+// IncidentContext extracts structured telemetry evidence from metadata, if present.
+func (i *Incident) IncidentContext() (*value.IncidentContext, error) {
+	var meta struct {
+		Context *value.IncidentContext `json:"incident_context"`
+	}
+	if len(i.metadata) == 0 {
+		return nil, nil
+	}
+	if err := json.Unmarshal(i.metadata, &meta); err != nil {
+		return nil, err
+	}
+	return meta.Context, nil
+}
+
+// SetIncidentContext stores structured telemetry evidence in incident metadata.
+func (i *Incident) SetIncidentContext(ctx value.IncidentContext) error {
+	meta := make(map[string]any)
+	if len(i.metadata) > 0 {
+		_ = json.Unmarshal(i.metadata, &meta)
+	}
+	meta["incident_context"] = ctx
+	bytes, err := json.Marshal(meta)
+	if err != nil {
+		return err
+	}
+	i.metadata = bytes
+	i.updatedAt = time.Now().UTC()
+	return nil
+}

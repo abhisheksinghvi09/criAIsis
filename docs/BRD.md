@@ -1,4 +1,4 @@
-# AI War Room
+# AI War Room: criAIsis
 ## Business Requirements Document & Product Architecture
 
 ---
@@ -7,49 +7,69 @@
 
 ## A.1 Executive Summary
 
-AI War Room is a Slack-native tool that spins up a simulated team of specialist AI agents — network, database, application, and security — to debate an active incident in real time, in-thread, grounded in each team's own documentation. Instead of one AI producing a single flattened summary, the incident commander watches specialists agree, disagree, and converge, the way a real cross-functional team would — before a human specialist is even paged.
+AI War Room (**criAIsis**) is a Slack-native incident investigation platform that spins up a simulated team of specialist AI agents — Network, Database, Application, and Security — to debate an active incident in real time, in-thread, grounded in each team's own runbooks, documentation, and live telemetry context. 
+
+Incidents are initiated either by human engineers via Slack slash commands (`/criaisis investigate`) or automatically via incoming webhook integrations from monitoring and observability systems (Grafana Alerting, AWS CloudWatch Alarms/SNS, Datadog).
+
+**Core Product Mandate:**
+> **The Agent's Role is Deep Read-Only Diagnostic Investigation, NEVER Blind Autonomous Production Remediation.**
+
+The agents act as expert investigative detectives. They do not mutate production or execute destructive operations. Instead, via grounded RAG, structured alert context, and scoped read-only diagnostic tool adapters (via Model Context Protocol / MCP or direct read-only APIs), they rapidly answer:
+1. **Which specific logs and error stack traces are failing?**
+2. **Which department/domain owns the problem?** (Network, Database, Application, Security)
+3. **What is the root cause classification?** Is it an **Infrastructure issue**, a **Code-level regression**, or **Both (Hybrid)**?
 
 ## A.2 Problem Statement
 
-When an incident happens, the on-call commander must quickly form a hypothesis across domains they may not be expert in (network, database, application, security), usually while the people who *are* expert in those domains are asleep or unavailable. Existing AI incident tools compress this into one confident-sounding summary, which hides the uncertainty and disagreement that would actually help a commander know where to dig first.
+When an outage strikes, the on-call Incident Commander (IC) must quickly form a hypothesis across technical domains they may not be expert in (network routing, database connection saturation, microservice panics, security anomalies), usually while the human specialists who *are* expert in those domains are asleep or paged into a chaotic call. 
+
+Existing incident AI tools compress alerts into a single flattened, hallucinated summary, obscuring cross-domain tensions and failure distinctions (e.g. mistaking an unindexed code migration for a database capacity issue). Furthermore, relying on unguided autonomous agents that wander across live production clusters introduces unacceptable latency, unpredictable cloud costs, and high security blast-radius risks.
 
 ## A.3 Business Objectives
 
 | Objective | Description |
 |---|---|
-| Reduce mean time to hypothesis | Give the commander a plausible root-cause direction within minutes of starting the debate, not after paging multiple humans |
-| Preserve institutional knowledge | Every debate is grounded in the team's own runbooks/docs, and every transcript becomes reusable knowledge |
-| Low adoption friction | Lives inside Slack, where incidents already happen — no new tool for the commander to context-switch into during a fire |
-| Sustainable monetization | Free/self-serve entry (small teams, limited personas/docs) with paid tiers for larger teams, unlimited history, and analytics |
+| **Reduce Mean Time to Hypothesis (MTTH)** | Deliver a grounded, cross-domain diagnostic hypothesis within 25 seconds of human trigger, or <30 seconds from automated webhook receipt |
+| **Categorize Root-Cause Nature** | Accurately classify failures into Code-Level, Infrastructure-Level, or Hybrid root causes |
+| **Preserve Institutional Knowledge** | Every debate cites verified runbook excerpts, and transcripts form permanent post-mortem audit logs |
+| **Zero Production Blast Radius** | Strict read-only diagnostic posture guarantees agents never trigger unintended production mutations |
+| **Automated Observability Integration** | Automatically trigger incidents and ingest structured error logs, stack traces, and metrics from Grafana and CloudWatch |
+| **Dev / Sandbox Reproduction** | Enable local replay and sandbox reproduction of failure scenarios to safely verify hypotheses and prospective fixes |
+| **Low Friction / In-Situ Workflow** | Operates entirely within Slack threads where incident firefighting already occurs |
 
 ## A.4 Target Users / Personas
 
-| Persona | Role | Primary need |
+| Persona | Role | Primary Need |
 |---|---|---|
-| Incident Commander | On-call engineer running an active incident | Fast, trustworthy cross-domain signal without paging everyone immediately |
-| Platform/SRE Admin | Configures the tool for their org | Easy way to keep each agent's knowledge base current |
-| Paged Specialist | Joins mid-incident | Fast catch-up on what's already been ruled in/out |
+| **Incident Commander (IC)** | On-call engineer running an active war room | Rapid, trustworthy cross-domain hypothesis without paging everyone immediately |
+| **Platform / SRE Admin** | Configures and maintains knowledge bases & integrations | Easy runbook ingestion, alert webhook configuration, and prompt tuning |
+| **Paged Specialist** | Joins mid-incident in Slack | Fast catch-up on what hypotheses were ruled in/out and cited runbook evidence |
 
 ## A.5 Scope
 
 **In scope for MVP:**
-- Multi-tenant data architecture from Day 1 (schema-level `workspace_id` scoping)
-- Slack app installable via OAuth into workspaces with encrypted bot tokens
-- Manual document upload per persona (Markdown/Plain text)
-- Four fixed personas (network, database, application, security), each independently enable/disable-able and prompt-editable
-- Slash-command-triggered debate using a **2-Stage Asynchronous Clash** (Stage 1: parallel specialist hypotheses; Stage 2: cross-domain rebuttal & consensus synthesis) posted threaded in Slack
-- `@mention` follow-up to a specific agent after the initial debate
-- Manual incident resolution command (`/criaisis resolve`)
-- Lean Web dashboard: persona viewing, document management/upload, incident history, transcript viewer with cited chunk inspection
+- Multi-tenant data architecture from Day 1 (`workspace_id` scoping on every table and repository)
+- Slack app installable via OAuth with AES-GCM-256 encrypted bot token storage
+- Automated Alert Ingestion Webhook (`POST /api/v1/integrations/alerts/:provider`) supporting Grafana and AWS CloudWatch payloads (extracting error traces, logs, and metric spikes into `IncidentContext`)
+- Asynchronous micro-batch document ingestion with explicit status tracking (`pending`, `indexed`, `failed`)
+- Four fixed personas (network, database, application, security) with editable system prompts and enable/disable toggles
+- 2-Stage Asynchronous Clash (triggered via Slack slash command or webhook ingestion):
+  - Stage 1: Concurrent parallel specialist hypotheses (<10s) grounded in persona runbooks and alert telemetry
+  - Stage 2: Cross-domain rebuttal & IC consensus synthesis with root-cause classification (<15s)
+- Read-Only Diagnostic Tool Adapter contract (Model Context Protocol / MCP interface) for scoped telemetry queries
+- Native 4-tier incident severity model (`sev-1` through `sev-4`)
+- Hybrid citation tracking: relational `referenced_chunk_ids UUID[]` plus immutable `CitationSnapshot` in metadata JSONB
+- In-thread `@mention` follow-ups returning runbook-grounded diagnostic guidance and copy-paste human commands
+- Manual incident resolution (`/criaisis resolve`)
+- Local Incident Simulation & Sandbox Reproduction Framework (`task incident:simulate` with deterministic scenario fixtures and sandbox replay)
+- Lean Web dashboard for persona tuning, runbook management, incident history, and transcript auditing
 
-**Out of scope for MVP (see Part B, Section B.9 for roadmap):**
-- Redis cluster (Go in-memory worker channels satisfy MVP queue needs via `JobQueue` interface)
-- Aggregate analytics and vanity dashboards (deferred to focus on live incident signal)
-- Live integrations with monitoring/alerting tools (Datadog, PagerDuty, GitHub)
-- Automatic incident detection/triggering
-- More than 4 personas or user-defined custom personas
-- Multi-workspace paid billing/Stripe plan enforcement
-- Mobile app
+**Out of scope for MVP:**
+- Autonomous production remediation (no write/mutation access to clusters)
+- Embedding heavy external agent frameworks (e.g., OpenSRE as core runtime; OpenSRE/MCP adapters are treated strictly as read-only telemetry tools)
+- Distributed Redis clustering (in-memory Go channels satisfy MVP queue needs)
+- Vanity analytics charts (MTTR dashboards deferred)
+- Direct mutation integrations with cloud providers
 
 ## A.6 Functional Requirements
 
@@ -57,214 +77,126 @@ When an incident happens, the on-call commander must quickly form a hypothesis a
 |---|---|
 | FR-1 | Admin can install the Slack app into their workspace via OAuth |
 | FR-2 | Admin can upload, view, and delete documents, each tagged to exactly one persona |
-| FR-3 | Admin can edit each persona's display name, system prompt, and enabled/disabled state |
-| FR-4 | Any workspace member can start a debate via a Slack slash command with a free-text incident description |
-| FR-5 | System runs a 2-Stage Asynchronous Clash: Stage 1 runs enabled personas concurrently in parallel; Stage 2 cross-examines hypotheses and synthesizes an IC consensus with cited runbook references |
-| FR-6 | Each agent's response is grounded only in documents tagged to that agent's persona (no cross-persona knowledge leakage) |
-| FR-7 | System posts a final synthesized summary highlighting contradictions and probable root cause in-thread |
-| FR-8 | Any workspace member can `@mention` a specific agent after the debate to ask a follow-up question, and receive one additional grounded response |
-| FR-9 | Any workspace member can mark an incident resolved via slash command |
-| FR-10 | Dashboard users can browse past incidents, filter by status/date, and view a full transcript including which document excerpts each agent drew on for each turn |
-| FR-11 | [Post-MVP] Dashboard shows aggregate analytics: incidents per week, average time-to-resolution, most-referenced documents |
-| FR-12 | Dashboard access requires sign-in via the same Slack workspace identity (no separate password system) |
+| FR-3 | Document ingestion executes asynchronously with status tracking (`pending`, `indexed`, `failed`) and chunk counts |
+| FR-4 | Admin can edit each persona's display name, system prompt, and enabled/disabled state |
+| FR-5 | Any workspace member can initiate a debate via `/criaisis investigate` specifying description and optional severity (`sev-1` to `sev-4`) |
+| FR-6 | System accepts automated alert webhooks from Grafana and CloudWatch, extracting error logs, stack traces, and metrics to auto-create incidents and launch debates |
+| FR-7 | System executes 2-Stage Asynchronous Clash: Stage 1 concurrent specialist RAG + telemetry; Stage 2 cross-rebuttal and consensus synthesis |
+| FR-8 | Each specialist agent is strictly grounded only in documents tagged to its persona (zero cross-persona leakage) |
+| FR-9 | Consensus synthesis explicitly classifies root cause into **Code-Level**, **Infrastructure**, or **Hybrid** |
+| FR-10 | Turn citations store immutable snapshots (`CitationSnapshot`) in metadata JSONB ensuring post-mortems survive document modification |
+| FR-11 | Any member can `@mention` a specialist in-thread (`@criaisis @database ...`) and receive targeted diagnostic guidance and copy-paste queries |
+| FR-12 | Specialist agents can invoke scoped read-only diagnostic tools / MCP adapters with strict timeout (<5s) and zero write permissions |
+| FR-13 | Any member can mark an incident resolved via `/criaisis resolve`, locking the transcript and timestamping resolution |
+| FR-14 | Developers can reproduce and debug incidents locally using deterministic scenario fixtures (`testdata/scenarios/*.json`) and sandbox reproduction without production outages |
+| FR-15 | Web dashboard displays incident transcripts, active war rooms, and cited runbook excerpts with Slack OAuth authentication |
 
 ## A.7 Non-Functional Requirements
 
 | Category | Requirement |
 |---|---|
-| Latency | Slash command must acknowledge within Slack's 3-second webhook window regardless of how long the debate itself takes |
-| Data isolation | One workspace's documents, personas, and incident history must never be visible to another workspace |
-| Availability | Debate posting should degrade gracefully (partial results posted) rather than fail silently if one agent's call errors |
-| Auditability | Every agent turn must be traceable to the specific document excerpts that informed it |
-| Privacy | Uploaded documents (runbooks, configs) are customer data — encrypted at rest, never used to train shared models across customers |
-
-## A.8 Assumptions & Constraints
-
-- Assumes the team already uses Slack as their incident-response channel of record.
-- Assumes teams are willing to manually curate a modest starting document set (MVP does not auto-ingest from existing systems).
-- Constraint: LLM API costs scale with debate rounds × personas × incident volume — pricing tiers must account for this.
-- Constraint: solo/small engineering team building this — MVP scope is deliberately narrow to be buildable without a large team.
-
-## A.9 Risks & Mitigations
-
-| Risk | Mitigation |
-|---|---|
-| Agents produce plausible-sounding but wrong conclusions ("confident hallucination") | Every claim traceable to source excerpts in the transcript viewer; summary explicitly frames output as a hypothesis, not a verdict |
-| Low document coverage makes agents unhelpful ("garbage in, garbage out") | Onboarding flow nudges admins to seed at least a minimal doc set per persona before first use; empty-persona state is visibly flagged, not silently guessed |
-| Alert fatigue / noisy threads if debates run too long | Fixed, small round count by default; admin-configurable ceiling |
-| Cost overrun on LLM spend at scale | Round/persona limits enforced server-side per plan tier |
-
-## A.10 Success Metrics
-
-- Incidents run through the tool per active workspace per week (adoption depth)
-- Median time from debate start to resolution, trending down as document coverage grows
-- 30-day workspace retention post-install
-- % of debates where the IC follows up with `@mention` (proxy for perceived usefulness — people only dig deeper into tools they trust)
-
-## A.11 Stakeholders
-
-| Role | Responsibility |
-|---|---|
-| Product owner | Prioritization, roadmap, customer conversations |
-| Backend engineer(s) | API, orchestrator, data model |
-| Frontend engineer(s) | Dashboard |
-| Design partner customers | Early validation, document seeding feedback |
+| **Latency** | Slash command acknowledges in <500ms; full 2-stage debate posts in <25 seconds (<30s for webhook-triggered alerts) |
+| **Tenant Isolation** | Schema-level and repository-level scoping prevents any cross-tenant data leakage |
+| **Audit Durability** | Debate turns are append-only; citations preserve immutable snapshot text |
+| **Graceful Degradation** | If one agent LLM call or diagnostic tool times out, the remaining agents and consensus still post |
+| **Security** | Bot tokens encrypted at rest via AES-GCM-256; zero plaintext token logging; strict read-only execution posture |
 
 ---
 
 # PART B — Product & System Architecture
 
-## B.1 Architecture Overview
+### B.1 Architecture Overview
 
 ```mermaid
 flowchart TD
-    A[Slack workspace] -->|slash command / mention| B[API layer]
-    F[Web dashboard] -->|authenticated requests| B
-    B -->|enqueue| C[Job queue]
-    C --> D[Orchestrator]
-    D --> E[LLM provider]
-    D --> G[(Data store: workspaces, personas,<br/>documents, embeddings, incidents, transcripts)]
-    D -->|posts turns| A
-    B --> G
-    F -.->|Slack identity login| B
+    subgraph Ingress
+        A1[Slack Workspace] -->|slash command / mention| B[API Layer: Handlers & Routers]
+        A2[Grafana / CloudWatch / Datadog] -->|alert webhook with logs & metrics| B
+        F[Web Dashboard] -->|authenticated requests| B
+    end
+
+    subgraph Core Engine
+        B -->|enqueue job| C[Job Queue: in-memory channels]
+        C --> D[Orchestrator: 2-Stage Clash Engine]
+        D --> E[LLM Provider: Specialist & Synthesis Models]
+        D --> G[(PostgreSQL 16 + pgvector)]
+        B --> G
+    end
+
+    subgraph Telemetry & Diagnostics
+        D -.->|read-only probe via MCP / tool adapter| H[Read-Only Telemetry APIs: Prometheus / CloudWatch / K8s]
+    end
+
+    subgraph Egress & Post-Mortem
+        D -->|threaded Block Kit turns| A1
+        F -.->|Slack Identity OAuth| B
+    end
 ```
-
-**Component responsibilities:**
-
-| Component | Responsibility |
-|---|---|
-| API layer | Receives Slack webhooks and dashboard requests, handles auth, enqueues debate jobs — does no LLM work itself |
-| Job queue | Go in-memory buffered worker pool (`chan IncidentJob`) satisfying a `JobQueue` interface; decoupled execution with zero extra infrastructure (Redis for horizontal scaling post-MVP) |
-| Orchestrator | Runs the 2-Stage Asynchronous Clash: Stage 1 parallel specialist RAG + hypotheses; Stage 2 cross-rebuttal & consensus synthesis |
-| Data store | PostgreSQL 16 + pgvector: multi-tenant system of record for workspaces, personas, documents, vector chunks, incidents, debate turns |
-| LLM provider | Abstracted behind a single interface (`LLMClient`) so model vendor is swappable and test-mockable without touching debate logic |
-| Web dashboard | Lean configuration (personas, runbook documents) and audit review (incident history, transcript viewer with cited chunks) |
 
 ## B.2 Data Model (Conceptual)
 
-| Entity | Key attributes | Relationships |
+| Entity | Key Attributes | Relationships |
 |---|---|---|
-| Workspace | Slack team ID/name, plan tier, install date | Has many users, personas, documents, incidents |
-| User | Slack user ID, email, role (admin/member) | Belongs to a workspace |
-| Persona | Key (network/db/app/security), display name, system prompt, enabled flag | Belongs to a workspace; has many documents |
-| Document | Title, source type, raw text | Belongs to a workspace and a persona; has many chunks |
-| Document Chunk | Chunk text, embedding vector | Belongs to a document, workspace, and persona — retrieval always filters by workspace + persona |
-| Incident | Title, description, status, Slack channel/thread reference, timestamps | Belongs to a workspace; has many debate turns |
-| Debate Turn | Round number, content, referenced chunk IDs, Slack message reference | Belongs to an incident and a persona |
-
-**Tenant isolation principle:** every entity beneath Workspace carries a workspace reference, and every read/write is scoped to it — this is the single most important architectural invariant in the system, since a leak here means one customer's incident data appearing in another's dashboard.
+| **Workspace** | ID, Slack Team ID/Name, Encrypted Bot Token, Webhook Secret, Timestamps | Has many Users, Personas, Documents, Incidents |
+| **User** | ID, Workspace ID, Slack User ID, Email, Name, Role (`admin`/`member`) | Belongs to Workspace |
+| **Persona** | ID, Workspace ID, Key (`network`/`database`/`app`/`security`), Display Name, Prompt, IsEnabled | Belongs to Workspace; owns Documents |
+| **Document** | ID, Workspace ID, Persona ID, Title, ContentHash, Status (`pending`/`indexed`/`failed`), ChunkCount | Belongs to Workspace & Persona; has many Chunks |
+| **DocumentChunk** | ID, Document ID, ChunkText, TokenCount, Embedding `vector(1536)`, `tsvector`, Metadata JSONB | Belongs to Document, Workspace, Persona |
+| **Incident** | ID, Workspace ID, Title, Description, TriggerType (`slash_command`/`webhook`), Context JSONB, Slack Channel/Thread TS, Severity (`sev-1`..`sev-4`), Status, ResolvedAt | Belongs to Workspace; has many DebateTurns |
+| **DebateTurn** | ID, Incident ID, Workspace ID, Persona ID (nullable), Stage (1..3), TurnType, Content, ReferencedChunkIDs, Metadata JSONB | Belongs to Incident & Persona (nullable) |
 
 ## B.3 Feature-by-Feature Mini-Architecture
 
-### B.3.1 Slack App Install & Workspace Auth
-**Flow:** Admin clicks install → Slack OAuth redirect → API exchanges the temporary code for a permanent bot token → workspace record created/updated → admin lands on the dashboard, signed in.
-**Key decision:** the bot token is the single most sensitive piece of data in the system (it grants posting/reading rights in the customer's Slack) — encrypted at rest, never logged, never returned to the frontend.
+### B.3.1 Asynchronous Ingestion & Hybrid Search
+- **Ingestion:** Uploaded documents are saved with `status = 'pending'`. A background worker segments markdown, generates 1536-dim embeddings, writes chunks via `pgx.CopyFrom`, and updates `status = 'indexed'` with `chunk_count`.
+- **Hybrid Search:** PostgreSQL Reciprocal Rank Fusion (RRF) combines dense cosine similarity (`hnsw`) and sparse keyword matching (`gin(tsv)`), strictly scoped by `(workspace_id, persona_id)`.
 
-### B.3.2 Incident Trigger
-**Flow:** Commander runs the slash command with a free-text description → API validates and immediately enqueues a job, replying with an acknowledgment message → returns within Slack's timeout window.
-**Key decision:** this handler must do zero LLM or retrieval work — its only job is validate-and-enqueue, which is what makes the 3-second Slack deadline achievable regardless of how long the actual debate takes.
+### B.3.2 2-Stage Asynchronous Clash & Diagnostic Classification
+- **Stage 1 (Parallel Blast, <10s):** `errgroup` spawns 4 concurrent goroutines for enabled personas. Each runs scoped RAG against its persona runbooks, evaluates the incoming `IncidentContext` (logs, stack traces, metric tags), and posts its specialist hypothesis.
+- **Stage 2 (Consensus Synthesis, <15s):** Orchestrator feeds Stage 1 outputs into an adversarial synthesis prompt. The synthesizer identifies contradictions and outputs:
+  1. Consensus hypothesis
+  2. Root cause classification: **Code-Level**, **Infrastructure**, or **Hybrid**
+  3. Actionable next steps with cited runbook tags and exact copy-paste diagnostic queries
 
-### B.3.3 Document Ingestion & Retrieval
-**Flow (ingestion):** Admin uploads a document tagged to a persona → text is split into chunks → each chunk is embedded and stored, tagged with workspace and persona.
-**Flow (retrieval):** Orchestrator takes the incident description, embeds it, and searches only chunks matching the requesting persona's workspace + persona tag → returns the top-matching excerpts.
-**Key decision:** persona-scoped filtering is what keeps the network agent from ever seeing database-only documents — this is what makes the "specialist" framing real rather than cosmetic.
+### B.3.3 Interactive Follow-up & Advisory Role
+- When an engineer asks `@criaisis @database why are connections spiking?`, the event handler loads full thread history, runs targeted RAG on database runbooks, and returns:
+  - Runbook diagnosis
+  - Exact safe diagnostic queries (e.g. `SELECT pid, query FROM pg_stat_activity...`) for human execution
+  - Zero autonomous production mutation
 
-### B.3.4 Multi-Agent Debate Orchestrator (2-Stage Asynchronous Clash)
-**Flow:**
-- **Stage 1 (Parallel Blast, <10s):** Orchestrator fires concurrent goroutines (using `golang.org/x/sync/errgroup`) for each enabled persona. Each goroutine performs scoped vector retrieval against its persona's runbooks, calls the LLM with persona role + retrieved context + incident description, and writes the specialist hypothesis into a thread-safe collector.
-- **Stage 2 (Cross-Rebuttal & Consensus Synthesis, <15s):** Orchestrator feeds the incident description and all Stage 1 specialist outputs into an adversarial synthesis prompt. The synthesis LLM call explicitly cross-examines the hypotheses (e.g., contrasting database lock claims with network packet drop evidence) and formulates the Incident Commander consensus hypothesis with cited runbook sections.
-- **Posting & Persistence:** Each specialist turn and the final consensus are posted as threaded Slack Block Kit messages and permanently stored in `debate_turns`.
-**Key decision:** Running Stage 1 concurrently reduces total turnaround time from ~90s to under 25s while preserving distinct domain viewpoints before synthesis.
+### B.3.4 Local Incident Simulation & Sandbox Reproduction Framework
+- **Deterministic Fixture Simulation:** Developers can execute `task incident:simulate -- scenario=db_connection_exhaustion` in dev. Seeds scenario runbooks, fires simulated slash command or webhook payload, validates Stage 1/2 outputs, and verifies consensus classification against expected fixtures without requiring a live outage.
+- **Sandbox Reproduction Pipeline:** Recreates the incident parameters (synthetic load, injected latency, failing SQL migration) in an isolated container/sandbox environment to verify hypotheses and fixes safely.
 
-### B.3.5 LLM Provider Layer
-**Purpose:** a single abstraction point between the orchestrator and whichever model vendor is in use, so providers can be swapped, mixed per persona, or mocked entirely for testing — without touching debate logic.
+### B.3.5 Automated Telemetry Webhook Ingestion
+- `POST /api/v1/integrations/alerts/:provider` accepts alerts from Grafana, AWS CloudWatch, and Datadog.
+- The handler verifies webhook signatures, parses structured error logs, stack traces, and metric anomalies, constructs an `IncidentContext` entity, creates an incident in PostgreSQL, and enqueues the job to the in-memory queue.
+- Posts the initial incident alert and launches the 2-Stage Clash directly in the designated Slack incident channel.
 
-### B.3.6 Slack Posting & Threading
-**Flow:** Every turn is posted with a distinct sender identity per persona, always anchored to the original incident thread — never to the channel root — so the debate reads as a real, contained conversation rather than bot spam in the main channel.
+### B.3.6 Read-Only Diagnostic Probing Layer (MCP / Tool Adapters)
+- Implements a strict read-only tool adapter contract (`DiagnosticTool` / Model Context Protocol).
+- When a persona evaluates a hypothesis, it can invoke read-only queries (e.g., query Prometheus for error rate, query CloudWatch Logs Insights for exception frequency) with hard timeouts (<5s).
+- Tool calls enforce zero write/mutation permissions, preserving the Zero Blast Radius mandate.
 
-### B.3.7 Follow-Up / @Mention Handling
-**Flow:** Commander @mentions a specific agent with a question → API enqueues a single-agent job carrying the full existing history plus the new question → orchestrator runs one additional turn for just that persona → posts and persists it the same way as a normal round.
+## B.4 Tech Stack
 
-### B.3.8 Incident Resolution & Transcript Storage
-**Flow:** Commander runs the resolve command → incident status and resolution timestamp update → the full ordered transcript becomes permanently queryable from the dashboard, forming the raw material for future analytics and knowledge reuse.
-
-### B.3.9 Web Dashboard
-| Page | Purpose |
-|---|---|
-| Login | Sign in with the workspace's Slack identity |
-| Personas | View/edit each agent's prompt, enable or disable agents |
-| Documents | Upload, tag, and remove knowledge per persona |
-| Incident History | Browse, filter, and search past incidents |
-| Transcript Viewer | Read a past debate turn-by-turn, with the source excerpts each turn drew on |
-| Analytics | Team-level trends: incidents/week, time-to-resolution, most-cited documents |
-| Settings | Team membership, plan, workspace-level configuration |
-
-### B.3.10 Dashboard Authentication
-**Flow:** User signs in with their Slack identity (not a separate password) → API verifies the identity token, resolves it to a workspace-scoped user record → issues a session tied to that workspace → all subsequent dashboard requests are automatically scoped to that workspace only.
-
-## B.4 API Surface (Conceptual)
-
-| Area | Operations |
-|---|---|
-| Slack webhooks | Receive slash commands; receive `@mention` events |
-| Auth | Slack OAuth install callback; dashboard sign-in |
-| Personas | List, view, create, edit |
-| Documents | List, upload, delete |
-| Incidents | List (paginated/filterable), view full transcript, mark resolved |
-| Analytics | Retrieve aggregate summary metrics |
-
-## B.5 Deployment Architecture
-
-```mermaid
-flowchart TD
-    subgraph Hosting environment
-        API[API layer]
-        WORKER[Orchestrator worker]
-        STORE[(Data store)]
-        QUEUE[(Job queue)]
-        FE[Dashboard frontend]
-    end
-    Slack -.-> API
-    Browser -.-> FE
-    FE -.-> API
-    API --> STORE
-    API --> QUEUE
-    WORKER --> STORE
-    WORKER --> QUEUE
-```
-API and orchestrator worker run as independently scalable processes from the same codebase; the frontend is a separately deployed static build.
-
-## B.6 Security & Multi-Tenancy
-
-- Every data access scoped by workspace, enforced at the data-access layer, not just in request handlers — a bug in a handler should never be able to leak cross-tenant data.
-- Slack bot tokens encrypted at rest.
-- All inbound Slack webhook traffic cryptographically verified as genuinely originating from Slack before any processing occurs.
-- Per-workspace rate limiting so one noisy tenant cannot degrade service for others.
-
-## B.7 Scalability Considerations
-
-- Orchestrator workers leverage Go's native lightweight goroutines and buffered channels for in-memory task decoupling during MVP, satisfying a clean `JobQueue` interface.
-- For post-MVP multi-instance clustering, a Redis-backed queue implementation can be swapped into the `JobQueue` interface without altering orchestrator logic.
-- Retrieval store with PostgreSQL `pgvector` HNSW indexing scales comfortably to millions of document chunks before specialized vector infrastructure is needed.
-- 2-Stage Asynchronous Clash parallelizes domain persona queries via `errgroup`, bounding Stage 1 latency to the single slowest LLM call rather than the sum of 4 sequential calls.
-
-## B.8 Tech Stack Summary
-
-| Layer | Choice | Why |
+| Layer | Choice | Rationale |
 |---|---|---|
-| Backend | Go (Golang) | High concurrency, type safety, single static binary deployment, excellent fit for the async worker model |
-| Data store | PostgreSQL 16 + pgvector | Unified ACID relational store and vector similarity search in a single database engine |
-| Job queue | Go worker channels (with `JobQueue` interface) | In-process asynchronous decoupling without Redis operational overhead for MVP (Redis swappable post-MVP) |
-| Frontend | React + TypeScript (Vite + Tailwind) | Clean, fast SPA for document management and incident transcript auditing |
-| Hosting | Managed container platform (Fly.io / Render / AWS ECS) | Low operational maintenance, zero cluster management burden |
+| **Language** | Go (Golang) | High concurrency (`errgroup`), single binary deployment, strict typing |
+| **Database** | PostgreSQL 16 + pgvector | Unified ACID relational storage and vector HNSW indexing |
+| **Job Queue** | In-Memory Go Channels (`JobQueue` interface) | Zero Redis operational overhead for MVP; Redis swappable post-MVP |
+| **Tool Protocol** | Model Context Protocol (MCP) / Go Tool Adapters | Standardized read-only diagnostic probing without vendor lock-in |
+| **Frontend** | React + TypeScript (Vite + Tailwind) | Minimal audit dashboard and runbook management |
+| **Automation** | Taskfile (`Taskfile.yml`) | Standardized developer operations (migrate, test, run, simulate) |
 
-## B.9 Post-MVP Roadmap
+## B.5 Architecture Decision Records (ADR)
 
-- Redis-backed distributed queue for multi-instance horizontal scaling
-- Aggregate analytics dashboard (incidents/week, average MTTR, most cited runbook documents)
-- Live integrations (monitoring/alerting/deploy tools: Datadog, PagerDuty, GitHub) replacing manual runbook paste
-- Automatic incident triggering from alerting tools instead of manual slash command
-- Mining historical team chat for tribal knowledge to seed the document corpus automatically
-- Auto-generated regression test/chaos experiment derived from each resolved incident
-- Confidence scoring or structured voting among agents instead of fixed debate rounds
-- Custom, user-defined personas beyond the default four
+### ADR-001: Separation of "The Brain" vs. "The Hands" (Self-Contained Go Orchestration vs. External SRE Agent Frameworks)
+
+* **Context:** Several open-source frameworks (such as OpenSRE) provide autonomous agent tooling for SRE tasks by running looping agent daemons against Kubernetes and cloud environments. We evaluated whether to build criAIsis on top of an existing SRE agent framework.
+* **Decision:** We maintain criAIsis's core orchestrator natively in Go ("The Brain") and treat external cluster inspection tools, telemetry connectors, or OpenSRE modules strictly as read-only diagnostic adapters ("The Hands") via MCP.
+* **Rationale:**
+  1. **Latency & SLAs:** An active incident requires an immediate cross-domain hypothesis (<25s). Unbounded autonomous agent loops take minutes exploring cluster state and fail incident SLAs.
+  2. **Product Differentiation:** The defensible moat of criAIsis is the 2-stage dialectic clash between 4 specialist personas (Network, Database, Application, Security) and deterministic root-cause classification (Code vs Infra vs Hybrid). Generic agent frameworks lack this multi-persona adversarial tension.
+  3. **Zero Blast Radius & Enterprise Adoption:** Products requiring root cluster admin permissions face severe enterprise security friction (6-12 month review cycles). criAIsis operates with zero blast radius: Slack-native advice, runbook RAG, and read-only diagnostic queries.
+  4. **Clean Architecture & Operational Simplicity:** Statically compiled Go binary, Composition Root pattern, and single PostgreSQL instance. No external Python daemons or multi-service cluster dependencies.
