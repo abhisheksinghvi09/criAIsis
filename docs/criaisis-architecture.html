@@ -1,0 +1,1497 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>criAIsis War Room</title>
+<meta name="description" content="Six-view architecture walkthrough of criAIsis, the Slack-native incident war room where four AI specialists debate an outage and a commander agent names the root cause.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+/* ── criAIsis war-room console ───────────────────────────────────────────────
+   Deliberately single-theme. The subject is an incident console at 3am; the
+   six Mermaid diagrams theme reliably against one known ground, and every
+   colour below is painted explicitly so the page holds on any host ground. */
+:root {
+  --ground:      #0B0F14;
+  --panel:       #121821;
+  --panel-raise: #18212C;
+  --line:        #26303B;
+  --line-soft:   #1B242E;
+
+  --ink:         #E3E9F0;
+  --ink-dim:     #93A1B2;
+  --ink-faint:   #5F6C7B;
+
+  /* Signal amber is the page accent and is reserved: no persona wears it. */
+  --signal:      #F5A524;
+  --signal-deep: #7A4F07;
+
+  /* Persona hues. These carry information in every diagram — keep them fixed. */
+  --network:     #38BDF8;
+  --database:    #A78BFA;
+  --application: #4ADE80;
+  --security:    #FB7185;
+
+  --forbidden:   #E5484D;
+
+  --measure: 66ch;
+  --rail: 232px;
+
+  --step--1: 0.795rem;
+  --step-0:  0.975rem;
+  --step-1:  1.18rem;
+  --step-2:  1.55rem;
+  --step-3:  2.1rem;
+  --step-4:  3.05rem;
+
+  --font-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "SF Mono", Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: var(--step-0);
+  line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Faint console grid, so the ground reads as an instrument panel not a void. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    linear-gradient(var(--line-soft) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line-soft) 1px, transparent 1px);
+  background-size: 64px 64px;
+  opacity: 0.38;
+  -webkit-mask-image: radial-gradient(ellipse 120% 80% at 50% 0%, #000 20%, transparent 78%);
+  mask-image: radial-gradient(ellipse 120% 80% at 50% 0%, #000 20%, transparent 78%);
+}
+
+h1, h2, h3, h4 { font-family: var(--font-display); text-wrap: balance; margin: 0; }
+p { margin: 0; max-width: var(--measure); }
+a { color: var(--signal); }
+
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+/* ── Shell ─────────────────────────────────────────────────────────────── */
+.shell {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: var(--rail) minmax(0, 1fr);
+  gap: 0;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+/* ── Left rail ─────────────────────────────────────────────────────────── */
+.rail {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  padding: 32px 22px 28px;
+  border-right: 1px solid var(--line);
+  background: linear-gradient(180deg, #0D1219 0%, var(--ground) 100%);
+}
+
+.mark {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.mark b {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--step-1);
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.mark span {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.rail-nav { display: flex; flex-direction: column; gap: 1px; }
+.rail-nav a {
+  display: block;
+  padding: 8px 12px 8px 14px;
+  border-left: 2px solid transparent;
+  color: var(--ink-dim);
+  text-decoration: none;
+  font-size: var(--step--1);
+  line-height: 1.35;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.rail-nav a:hover { color: var(--ink); background: var(--panel); }
+.rail-nav a:focus-visible { outline: 2px solid var(--signal); outline-offset: -2px; }
+.rail-nav a.active {
+  color: var(--ink);
+  border-left-color: var(--signal);
+  background: var(--panel);
+}
+
+.rail-foot {
+  margin-top: auto;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  line-height: 1.7;
+  color: var(--ink-faint);
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+/* ── Main column ───────────────────────────────────────────────────────── */
+.main { min-width: 0; padding: 0 clamp(20px, 4vw, 64px) 120px; }
+
+/* ── Masthead ──────────────────────────────────────────────────────────── */
+.masthead { padding: clamp(48px, 9vh, 96px) 0 0; display: flex; flex-direction: column; gap: 26px; }
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--signal);
+}
+
+.masthead h1 {
+  font-size: var(--step-4);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.02;
+  max-width: 17ch;
+}
+.masthead h1 em {
+  font-style: normal;
+  color: var(--ink-faint);
+}
+
+.lede { font-size: var(--step-1); color: var(--ink-dim); max-width: 60ch; }
+
+/* The mandate is the product's thesis — it gets the boldest moment on the page. */
+.mandate {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0 20px;
+  align-items: center;
+  padding: 22px 26px;
+  background:
+    linear-gradient(90deg, rgba(245,165,36,0.10), rgba(245,165,36,0.015) 60%, transparent);
+  border: 1px solid var(--signal-deep);
+  border-left: 3px solid var(--signal);
+}
+.mandate-key {
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--signal);
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+}
+.mandate p {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--step-1);
+  line-height: 1.38;
+  letter-spacing: -0.015em;
+  max-width: 54ch;
+}
+.mandate p b { color: var(--signal); font-weight: 600; }
+
+.stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.chip {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+
+/* ── Sections ──────────────────────────────────────────────────────────── */
+.view {
+  padding-top: clamp(64px, 11vh, 108px);
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  scroll-margin-top: 24px;
+}
+
+.view-head { display: flex; flex-direction: column; gap: 12px; }
+.view-head h2 {
+  font-size: var(--step-3);
+  font-weight: 600;
+  letter-spacing: -0.028em;
+  line-height: 1.1;
+  max-width: 22ch;
+}
+.deck { color: var(--ink-dim); }
+
+/* ── Diagram panel ─────────────────────────────────────────────────────── */
+.panel {
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+.panel-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-raise);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.panel-bar::before {
+  content: "";
+  width: 7px; height: 7px;
+  background: var(--signal);
+  flex: none;
+}
+.panel-body { overflow-x: auto; padding: 22px 18px; }
+.mermaid { min-width: 560px; }
+.mermaid svg { max-width: 100%; height: auto; }
+
+/* ── Legend ────────────────────────────────────────────────────────────── */
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.key {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--ink-dim);
+}
+.key::before {
+  content: "";
+  width: 11px; height: 11px;
+  background: var(--sw, var(--ink-faint));
+  border: 1px solid rgba(255,255,255,0.22);
+  flex: none;
+}
+.key.dash::before {
+  background: transparent;
+  border: 0;
+  border-top: 2px dashed var(--sw, var(--ink-faint));
+  height: 0; width: 16px;
+}
+
+/* ── Notes ─────────────────────────────────────────────────────────────── */
+.notes-head {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--line);
+}
+.notes { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); }
+.note { display: flex; flex-direction: column; gap: 6px; }
+.note h4 {
+  font-size: var(--step-0);
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  color: var(--ink);
+}
+.note p { font-size: var(--step--1); color: var(--ink-dim); max-width: 46ch; }
+.note code, .deck code, td code, .prose code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  color: var(--ink);
+  background: var(--panel-raise);
+  border: 1px solid var(--line);
+  padding: 0.5px 5px;
+}
+
+/* Numbered list — used only where sequence genuinely carries meaning. */
+.steps { display: flex; flex-direction: column; gap: 16px; counter-reset: s; }
+.step {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 0 16px;
+  align-items: baseline;
+}
+.step::before {
+  counter-increment: s;
+  content: counter(s, decimal-leading-zero);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--signal);
+  padding-top: 3px;
+}
+.step h4 { font-size: var(--step-0); font-weight: 600; }
+.step p { font-size: var(--step--1); color: var(--ink-dim); }
+
+/* ── Tables ────────────────────────────────────────────────────────────── */
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); }
+table { border-collapse: collapse; width: 100%; min-width: 580px; font-size: var(--step--1); }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+thead th {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  background: var(--panel-raise);
+  border-bottom: 1px solid var(--line);
+  font-weight: 500;
+}
+tbody tr:last-child td { border-bottom: 0; }
+tbody td:first-child { color: var(--ink); font-weight: 500; }
+td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.state {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border: 1px solid;
+  white-space: nowrap;
+}
+.state.built   { color: var(--application); border-color: rgba(74,222,128,0.4);  background: rgba(74,222,128,0.09); }
+.state.part    { color: var(--signal);      border-color: rgba(245,165,36,0.42); background: rgba(245,165,36,0.09); }
+.state.planned { color: var(--ink-faint);   border-color: var(--line);           background: transparent; }
+
+/* ── Budget bar ────────────────────────────────────────────────────────── */
+.budget { display: flex; flex-direction: column; gap: 10px; }
+.budget-track {
+  display: flex;
+  height: 40px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  overflow: hidden;
+}
+.seg {
+  display: flex;
+  align-items: center;
+  padding-left: 11px;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: #08121A;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  border-right: 1px solid var(--ground);
+}
+.seg:last-child { border-right: 0; }
+.seg.ack { background: var(--signal);  flex: 0 0 4%; padding-left: 0; }
+.seg.s1  { background: var(--network); flex: 0 0 38%; }
+.seg.s2  { background: var(--database); flex: 1 1 auto; }
+.budget-scale {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--ink-faint);
+}
+
+/* ── Closing ───────────────────────────────────────────────────────────── */
+.deliver { display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); }
+.persona-card {
+  padding: 20px 22px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--pc, var(--signal));
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.persona-card h4 { font-size: var(--step-1); font-weight: 600; letter-spacing: -0.018em; }
+.persona-card .role {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--pc, var(--signal));
+}
+.persona-card p { font-size: var(--step--1); color: var(--ink-dim); }
+
+.colophon {
+  margin-top: 96px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--ink-faint);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 26px;
+}
+
+/* ── Responsive ────────────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .shell { grid-template-columns: minmax(0, 1fr); }
+  .rail {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 20px;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding: 16px 20px;
+  }
+  .rail-nav { flex-direction: row; gap: 2px; }
+  .rail-nav a { white-space: nowrap; border-left: 0; border-bottom: 2px solid transparent; }
+  .rail-nav a.active { border-left: 0; border-bottom-color: var(--signal); }
+  .rail-foot, .mark span { display: none; }
+  .mandate { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .mandate-key { writing-mode: horizontal-tb; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+}
+html { scroll-behavior: smooth; }
+</style>
+
+<style>
+/* Standalone-only: readable fallback when the Mermaid CDN is unreachable. */
+.mermaid p, .mermaid div, .mermaid span {
+  max-width: none;
+  margin: 0;
+  line-height: normal;
+}
+pre.mermaid[data-unrendered] {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+  white-space: pre;
+  margin: 0;
+}
+.offline-note {
+  margin-top: 20px;
+  padding: 10px 14px;
+  border: 1px solid var(--signal-deep);
+  border-left: 3px solid var(--signal);
+  background: rgba(245,165,36,0.08);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--ink-dim);
+}
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <aside class="rail">
+    <div class="mark">
+      <b>criAIsis</b>
+      <span>War Room</span>
+    </div>
+    <nav class="rail-nav" aria-label="Architecture views">
+      <a href="#topology">Container map</a>
+      <a href="#clash">The 2-stage clash</a>
+      <a href="#budget">Ingress &amp; latency budget</a>
+      <a href="#data">Tenancy &amp; retrieval</a>
+      <a href="#blast">Zero blast radius</a>
+      <a href="#sim">Simulation &amp; sandbox</a>
+      <a href="#status">Build status</a>
+      <a href="#delivers">What it delivers</a>
+    </nav>
+    <div class="rail-foot">
+      Go 1.27<br>
+      PostgreSQL 16 + pgvector<br>
+      Claude Opus 5
+    </div>
+  </aside>
+
+  <main class="main">
+
+    <!-- ── Masthead ───────────────────────────────────────────────────── -->
+    <header class="masthead">
+      <div class="eyebrow">Architecture walkthrough</div>
+      <h1>Four specialists argue. <em>One commander decides.</em></h1>
+      <p class="lede">
+        criAIsis spins up a simulated team of domain specialists — network, database,
+        application, security — to debate a live incident inside the Slack thread where
+        the firefighting already is. Each one is grounded only in its own runbooks. An
+        Incident Commander agent then cross-examines them and names a root cause.
+      </p>
+
+      <div class="mandate">
+        <div class="mandate-key">Mandate</div>
+        <p>
+          The agent's role is deep read-only diagnostic investigation,
+          <b>never blind autonomous production remediation.</b>
+        </p>
+      </div>
+
+      <div class="stack">
+        <span class="chip">Go 1.27 · single binary</span>
+        <span class="chip">PostgreSQL 16 + pgvector</span>
+        <span class="chip">Claude Opus 5 · Messages API</span>
+        <span class="chip">structured outputs</span>
+        <span class="chip">HNSW + GIN · RRF hybrid search</span>
+        <span class="chip">in-process job queue</span>
+        <span class="chip">MCP read-only adapters</span>
+        <span class="chip">Slack Block Kit</span>
+      </div>
+
+      <p class="deck">
+        Six views for engineers: what deploys and what it talks to, the lifecycle of one
+        investigation, the latency budget that drives every structural decision, the
+        multi-tenant data and retrieval model, the safety boundary, and the simulation
+        framework that lets all of it be tested without an outage.
+      </p>
+    </header>
+
+    <!-- ── 1. Container map ───────────────────────────────────────────── -->
+    <section class="view" id="topology">
+      <div class="view-head">
+        <div class="eyebrow">Container map</div>
+        <h2>One binary, one database, two model providers</h2>
+        <p class="deck">
+          Everything inside the dashed boundary compiles to a single statically linked Go
+          binary. There is no message broker, no vector database, no Python sidecar, and no
+          agent daemon. Three ingress paths converge on the same clash engine, and the only
+          stateful dependency is one PostgreSQL instance.
+        </p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-bar">deployment topology</div>
+        <div class="panel-body">
+<pre class="mermaid">
+flowchart TB
+  subgraph ING["Ingress"]
+    direction LR
+    SL["Slack workspace<br/>/criaisis investigate · @mention · resolve"]
+    AL["Grafana · CloudWatch · Datadog<br/>alert webhooks"]
+    WEB["Web dashboard<br/>runbooks · transcripts"]
+  end
+
+  subgraph BIN["criAIsis binary — Go, composition root in cmd/criaisis"]
+    direction TB
+    RT["router · chi<br/>CORS · RequestID · Recoverer · signature verify"]
+    HD["handlers<br/>parse · validate DTO · format response"]
+    QU["job queue<br/>buffered chan IncidentJob + worker pool"]
+    SV["services<br/>clash orchestrator · ingestion"]
+    RP["repositories<br/>every query scoped by workspace_id"]
+    RT --> HD
+    HD -->|"enqueue, ack fast"| QU
+    QU --> SV
+    HD --> SV
+    SV --> RP
+  end
+
+  subgraph MOD["Model providers"]
+    direction TB
+    CL["Claude Opus 5<br/>Messages API · structured outputs"]
+    EM["OpenAI-compatible /embeddings<br/>text-embedding-3-small · 1536-d"]
+  end
+
+  subgraph TEL["Read-only telemetry — MCP adapters"]
+    PR["Prometheus instant query"]
+    CW["CloudWatch Logs Insights"]
+  end
+
+  DB[("PostgreSQL 16 + pgvector<br/>relational + vectors, one store")]
+
+  SL --> RT
+  AL --> RT
+  WEB --> RT
+  SV --> CL
+  SV --> EM
+  SV -. "5s cap, read-only" .-> PR
+  SV -. "5s cap, read-only" .-> CW
+  RP --- DB
+  SV -->|"threaded Block Kit turns"| SL
+
+  classDef ingress fill:#0F2233,stroke:#38BDF8,color:#E3E9F0;
+  classDef core fill:#18212C,stroke:#A78BFA,color:#E3E9F0;
+  classDef model fill:#2A1F10,stroke:#F5A524,color:#E3E9F0;
+  classDef store fill:#10241A,stroke:#4ADE80,color:#E3E9F0;
+  classDef tele fill:#2A1519,stroke:#FB7185,color:#E3E9F0;
+  class SL,AL,WEB ingress;
+  class RT,HD,QU,SV,RP core;
+  class CL,EM model;
+  class DB store;
+  class PR,CW tele;
+</pre>
+        </div>
+      </div>
+
+      <div class="legend">
+        <span class="key" style="--sw:#38BDF8">Ingress</span>
+        <span class="key" style="--sw:#A78BFA">In-binary layer</span>
+        <span class="key" style="--sw:#F5A524">Model provider</span>
+        <span class="key" style="--sw:#4ADE80">Data store</span>
+        <span class="key" style="--sw:#FB7185">External telemetry</span>
+        <span class="key dash" style="--sw:#FB7185">Read-only, hard timeout</span>
+      </div>
+
+      <div class="notes-head">Talking points</div>
+      <div class="notes">
+        <div class="note">
+          <h4>The layer order is enforced, not suggested</h4>
+          <p>
+            <code>Router → Handler → Service → Repository</code>. Handlers never touch SQL;
+            repositories never hold business rules. <code>cmd/criaisis/main.go</code> is a
+            composition root — it wires and handles lifecycle, and contains zero logic.
+          </p>
+        </div>
+        <div class="note">
+          <h4>Two providers, because one cannot do both</h4>
+          <p>
+            Anthropic exposes no embeddings endpoint, so the chat and embedding contracts are
+            separate interfaces with separate credentials. The pgvector column is fixed at
+            1536 dimensions, which pins the embedding model choice.
+          </p>
+        </div>
+        <div class="note">
+          <h4>No Redis, deliberately</h4>
+          <p>
+            A buffered Go channel behind a <code>JobQueue</code> interface satisfies MVP
+            volume with zero operational surface. The interface is the seam: swapping in
+            Redis later touches one constructor in the composition root.
+          </p>
+        </div>
+        <div class="note">
+          <h4>External tools are hands, not brains</h4>
+          <p>
+            Prometheus and CloudWatch are reached through read-only adapters the orchestrator
+            calls. The orchestration itself stays native Go — an autonomous agent loop
+            wandering a cluster cannot meet a 25-second incident SLA.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 2. The clash ───────────────────────────────────────────────── -->
+    <section class="view" id="clash">
+      <div class="view-head">
+        <div class="eyebrow">Request lifecycle</div>
+        <h2>The 2-stage clash, and the persona boundary that holds it together</h2>
+        <p class="deck">
+          One incident, three stages. Stage 1 fans out to every enabled specialist
+          concurrently; Stage 2 cross-examines their claims into a verdict; Stage 3 answers
+          follow-ups in-thread. The <strong>persona boundary</strong> is the spine of the
+          whole design — follow the dashed amber edges to see the four places it is enforced.
+        </p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-bar">clash engine · internal/service/orchestrator</div>
+        <div class="panel-body">
+<pre class="mermaid">
+flowchart TB
+  INC["Incident persisted<br/>severity · logs · traces · metrics"]
+  Q["Build retrieval query<br/>incident text + verbatim log lines"]
+  E["Embed once<br/>one vector, reused by all four"]
+  P["Resolve enabled personas"]
+
+  BOUND["PERSONA BOUNDARY<br/>workspace_id + persona_id"]
+
+  subgraph S1["STAGE 1 · parallel blast · errgroup · 10s"]
+    direction TB
+    RET["Hybrid search per persona<br/>RRF over its own runbooks"]
+    PRM["Grounded prompt<br/>mandate + persona prompt"]
+    N["network"]
+    D["database"]
+    A["application"]
+    S["security"]
+    RET --> PRM
+  end
+
+  FILT{{"Citation filter<br/>drop any unseen chunk_id"}}
+  TURNS["Append 4 specialist turns<br/>ids + immutable snapshots"]
+
+  subgraph S2["STAGE 2 · consensus synthesis · 15s"]
+    direction TB
+    X["Cross-examine, name contradictions"]
+    V["Verdict: code · infra · hybrid<br/>+ owner + read-only next steps"]
+    X --> V
+  end
+
+  OUT["Threaded Block Kit turns to Slack"]
+  S3["STAGE 3 · @mention follow-up"]
+
+  INC --> Q
+  Q --> E
+  INC --> P
+  E --> RET
+  P --> RET
+  PRM --> N
+  PRM --> D
+  PRM --> A
+  PRM --> S
+  N --> FILT
+  D --> FILT
+  A --> FILT
+  S --> FILT
+  FILT --> TURNS
+  TURNS --> X
+  V --> OUT
+  OUT --> S3
+  S3 -.-> RET
+  BOUND -.->|"1 · who participates"| P
+  BOUND -.->|"2 · scopes every search"| RET
+  BOUND -.->|"3 · composes the prompt"| PRM
+  BOUND -.->|"4 · validates citations"| FILT
+
+  linkStyle 20,21,22,23 stroke:#F5A524,stroke-width:2px;
+
+  classDef boundary fill:#2A1F10,stroke:#F5A524,color:#FFFFFF,stroke-width:3px;
+  classDef net fill:#0F2233,stroke:#38BDF8,color:#E3E9F0;
+  classDef db fill:#1E1733,stroke:#A78BFA,color:#E3E9F0;
+  classDef app fill:#10241A,stroke:#4ADE80,color:#E3E9F0;
+  classDef sec fill:#2A1519,stroke:#FB7185,color:#E3E9F0;
+  classDef gate fill:#2A1F10,stroke:#F5A524,color:#E3E9F0;
+  classDef verdict fill:#1B242E,stroke:#E3E9F0,color:#FFFFFF,stroke-width:2px;
+  class BOUND boundary;
+  class N net;
+  class D db;
+  class A app;
+  class S sec;
+  class FILT,RET,PRM gate;
+  class X,V verdict;
+</pre>
+        </div>
+      </div>
+
+      <div class="legend">
+        <span class="key" style="--sw:#F5A524">Persona boundary &amp; its gates</span>
+        <span class="key" style="--sw:#38BDF8">network</span>
+        <span class="key" style="--sw:#A78BFA">database</span>
+        <span class="key" style="--sw:#4ADE80">application</span>
+        <span class="key" style="--sw:#FB7185">security</span>
+        <span class="key" style="--sw:#E3E9F0">Commander verdict — wears no domain colour</span>
+        <span class="key dash" style="--sw:#F5A524">Boundary consulted</span>
+      </div>
+
+      <div class="notes-head">The boundary, enforced at four points</div>
+      <div class="steps">
+        <div class="step">
+          <div>
+            <h4>Who participates</h4>
+            <p>
+              Personas are loaded per workspace and filtered to those an operator left
+              enabled. A workspace with no enabled personas fails fast rather than running a
+              silent, empty debate.
+            </p>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <h4>What each specialist can see</h4>
+            <p>
+              <code>SearchHybrid</code> is scoped to <code>(workspace_id, persona_id)</code>
+              in the SQL <code>WHERE</code> clause. The database specialist cannot retrieve a
+              network runbook — not by prompt instruction, but because the rows are
+              unreachable. This is the zero-cross-persona-leakage requirement, and an
+              integration test asserts it directly.
+            </p>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <h4>How the prompt is composed</h4>
+            <p>
+              The read-only mandate is prepended by the engine to every persona's system
+              prompt. Operators may edit their persona's prompt freely; they cannot edit away
+              the boundary, because it is not stored in the editable field.
+            </p>
+          </div>
+        </div>
+        <div class="step">
+          <div>
+            <h4>What may be cited</h4>
+            <p>
+              Models are asked to return the chunk IDs they relied on. Every returned ID is
+              checked against the set actually placed in that prompt, and anything else is
+              discarded before the turn is written. A hallucinated citation never reaches the
+              post-mortem record.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="notes-head">Talking points</div>
+      <div class="notes">
+        <div class="note">
+          <h4>Structured output, not prose parsing</h4>
+          <p>
+            Both stages pin the response to a JSON schema via <code>output_config.format</code>.
+            Classification, ownership, confidence and citations arrive as typed fields, so
+            the transcript never depends on a regex over model prose. An unparseable
+            classification fails the synthesis rather than being silently coerced.
+          </p>
+        </div>
+        <div class="note">
+          <h4>Graceful degradation is structural</h4>
+          <p>
+            A specialist goroutine never propagates its error — a failure is recorded against
+            that persona and the siblings continue. Three surviving specialists still produce
+            a consensus. Only a total washout aborts the clash.
+          </p>
+        </div>
+        <div class="note">
+          <h4>Effort is tiered by stage</h4>
+          <p>
+            Stage 1 runs four-wide against a 10-second budget, so it requests low reasoning
+            effort. Stage 2 is a single call where depth is the whole point, so it requests
+            high. Same model, different spend, driven by the latency budget.
+          </p>
+        </div>
+        <div class="note">
+          <h4>Stage 2 cites Stage 1's evidence</h4>
+          <p>
+            Retrieval happened per persona, so the commander runs no fifth search. Instead the
+            Stage 1 citation snapshots are pooled, and the verdict may cite only from that
+            pool — the consensus can never rest on evidence no specialist ever saw.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 3. Latency budget ──────────────────────────────────────────── -->
+    <section class="view" id="budget">
+      <div class="view-head">
+        <div class="eyebrow">Ingress &amp; timing</div>
+        <h2>The latency budget is the architecture</h2>
+        <p class="deck">
+          Slack gives a slash command 3 seconds to acknowledge; an incident commander gives
+          an answer about 25. Nearly every structural decision — the in-process queue, the
+          parallel fan-out, one shared embedding call, tiered reasoning effort, the 5-second
+          probe cap — falls out of that budget.
+        </p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-bar">ingress paths</div>
+        <div class="panel-body">
+<pre class="mermaid">
+flowchart LR
+  subgraph HUMAN["Human-triggered"]
+    direction TB
+    H1["/criaisis investigate<br/>description + optional severity"]
+    H2["Verify Slack signature"]
+    H3["Create incident<br/>trigger_type = slash_command"]
+    H1 --> H2 --> H3
+  end
+
+  subgraph AUTO["Alert-triggered"]
+    direction TB
+    A1["POST /api/v1/integrations/<br/>alerts/:provider"]
+    A2["Verify provider signature"]
+    A3["Parse to IncidentContext<br/>error logs · stack traces · metric spikes"]
+    A4["Create incident<br/>trigger_type = webhook"]
+    A1 --> A2 --> A3 --> A4
+  end
+
+  ACK(["Acknowledge<br/>under 500ms"])
+  QUEUE["Enqueue IncidentJob<br/>buffered channel"]
+  WORK["Worker pool<br/>picks up job"]
+  CLASH["2-stage clash"]
+  POST["Post turns into the Slack thread"]
+  FULL{{"Queue full?<br/>reject with backpressure,<br/>never block the HTTP handler"}}
+
+  H3 --> ACK
+  A4 --> ACK
+  ACK --> QUEUE
+  QUEUE --> FULL
+  FULL -->|"space"| WORK
+  WORK --> CLASH --> POST
+
+  classDef human fill:#0F2233,stroke:#38BDF8,color:#E3E9F0;
+  classDef auto fill:#2A1519,stroke:#FB7185,color:#E3E9F0;
+  classDef fast fill:#2A1F10,stroke:#F5A524,color:#FFFFFF,stroke-width:2px;
+  classDef work fill:#1E1733,stroke:#A78BFA,color:#E3E9F0;
+  class H1,H2,H3 human;
+  class A1,A2,A3,A4 auto;
+  class ACK,FULL fast;
+  class QUEUE,WORK,CLASH,POST work;
+</pre>
+        </div>
+      </div>
+
+      <div class="budget">
+        <div class="budget-track" role="img" aria-label="Latency budget: acknowledge under 0.5 seconds, Stage 1 up to 10 seconds, Stage 2 up to 15 seconds, leaving headroom to 25 seconds.">
+          <div class="seg ack" title="acknowledge"></div>
+          <div class="seg s1">Stage 1 · parallel blast</div>
+          <div class="seg s2">Stage 2 · synthesis, then post to thread</div>
+        </div>
+        <div class="budget-scale">
+          <span>0s</span><span>ack 0.5s</span><span>10s</span><span>25s</span>
+        </div>
+      </div>
+
+      <div class="notes-head">Talking points</div>
+      <div class="notes">
+        <div class="note">
+          <h4>Acknowledge first, work later</h4>
+          <p>
+            Both ingress paths persist the incident and return immediately. The clash runs on
+            a worker, not in the request. A webhook burst therefore cannot time out Slack or
+            Grafana — it fills a bounded queue and is rejected with backpressure at the edge.
+          </p>
+        </div>
+        <div class="note">
+          <h4>Fan-out is what buys Stage 1</h4>
+          <p>
+            Four sequential specialist calls would spend the entire budget before the
+            commander started. Running them concurrently makes Stage 1 cost one call's
+            latency, not four.
+          </p>
+        </div>
+        <div class="note">
+          <h4>Webhooks get a wider window</h4>
+          <p>
+            A webhook-triggered incident targets under 30 seconds rather than 25, because
+            parsing the provider payload into an <code>IncidentContext</code> happens before
+            the clock that matters to a human starts.
+          </p>
+        </div>
+        <div class="note">
+          <h4>Telemetry probes are capped, not trusted</h4>
+          <p>
+            A diagnostic probe gets 5 seconds. Past that it is cancelled and the specialist
+            is handed an explicit "unavailable" note instead of a result — a slow Prometheus
+            degrades the evidence, never the deadline.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 4. Data model ──────────────────────────────────────────────── -->
+    <section class="view" id="data">
+      <div class="view-head">
+        <div class="eyebrow">Tenancy &amp; retrieval</div>
+        <h2>One store, one invariant, two ranking signals</h2>
+        <p class="deck">
+          Relational records and 1536-dimension vectors live in the same PostgreSQL
+          instance, which removes an entire class of dual-write drift. Every table
+          downstream of <code>workspaces</code> carries <code>workspace_id</code> with a
+          cascading foreign key, and every repository method takes a typed
+          <code>WorkspaceID</code> it must put in the <code>WHERE</code> clause.
+        </p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-bar">schema &amp; hybrid retrieval</div>
+        <div class="panel-body">
+<pre class="mermaid">
+flowchart TB
+  subgraph TEN["Tenancy — every arrow is ON DELETE CASCADE"]
+    direction TB
+    W[("workspaces<br/>slack_team_id · encrypted bot token")]
+    U[("users")]
+    P[("personas<br/>unique (workspace_id, key)")]
+    DOC[("documents<br/>pending → indexed → failed")]
+    CH[("document_chunks<br/>embedding vector(1536) · tsv")]
+    INC[("incidents<br/>unique (workspace_id, channel, thread_ts)")]
+    DT[("debate_turns<br/>append-only · no Update, no Delete")]
+    W --> U
+    W --> P
+    P --> DOC --> CH
+    W --> INC --> DT
+    P -. "nullable, SET NULL" .-> DT
+  end
+
+  subgraph RET["Hybrid retrieval — Reciprocal Rank Fusion, in PostgreSQL"]
+    direction TB
+    QT["Query: incident text + verbatim log lines"]
+    DEN["Dense arm<br/>HNSW · vector_cosine_ops<br/>m=16, ef_construction=64"]
+    SPA["Sparse arm<br/>GIN over tsvector<br/>exact error-string matches"]
+    RRF{{"score = 1/(60+rank_dense)<br/>+ 1/(60+rank_sparse)"}}
+    TOP["top-K excerpts → the specialist"]
+    QT --> DEN --> RRF
+    QT --> SPA --> RRF
+    RRF --> TOP
+  end
+
+  CH -. "filtered by workspace_id AND persona_id" .-> DEN
+  CH -. "filtered by workspace_id AND persona_id" .-> SPA
+  TOP -. "immutable CitationSnapshot" .-> DT
+
+  classDef tenant fill:#10241A,stroke:#4ADE80,color:#E3E9F0;
+  classDef audit fill:#1B242E,stroke:#E3E9F0,color:#FFFFFF;
+  classDef dense fill:#1E1733,stroke:#A78BFA,color:#E3E9F0;
+  classDef sparse fill:#0F2233,stroke:#38BDF8,color:#E3E9F0;
+  classDef gate fill:#2A1F10,stroke:#F5A524,color:#E3E9F0;
+  class W,U,P,DOC,CH,INC tenant;
+  class DT audit;
+  class DEN dense;
+  class SPA sparse;
+  class RRF gate;
+</pre>
+        </div>
+      </div>
+
+      <div class="legend">
+        <span class="key" style="--sw:#4ADE80">Tenant-scoped table</span>
+        <span class="key" style="--sw:#E3E9F0">Append-only audit record</span>
+        <span class="key" style="--sw:#A78BFA">Dense / vector arm</span>
+        <span class="key" style="--sw:#38BDF8">Sparse / keyword arm</span>
+        <span class="key" style="--sw:#F5A524">Fusion step</span>
+      </div>
+
+      <div class="notes-head">Talking points</div>
+      <div class="notes">
+        <div class="note">
+          <h4>Why both ranking arms are needed</h4>
+          <p>
+            Incidents are full of strings that must match exactly — <code>exit code 137</code>,
+            <code>FATAL: remaining connection slots</code>, a stack frame path. Dense search
+            blurs those; keyword search nails them and misses paraphrase. Fusing the two ranks
+            costs one SQL statement and needs no tuned weight.
+          </p>
+        </div>
+        <div class="note">
+          <h4>Citations are stored twice, on purpose</h4>
+          <p>
+            A turn keeps <code>referenced_chunk_ids UUID[]</code> for joins, and an immutable
+            snapshot of the excerpt text in metadata JSONB. Six months later the runbook may
+            be rewritten or deleted; the post-mortem still shows what the agent actually read.
+          </p>
+        </div>
+        <div class="note">
+          <h4>The transcript cannot be rewritten</h4>
+          <p>
+            <code>DebateTurnRepository</code> exposes <code>Create</code>, <code>GetByID</code>
+            and <code>ListByIncident</code> — and deliberately no update or delete. Audit
+            durability is a property of the interface, not of reviewer discipline.
+          </p>
+        </div>
+        <div class="note">
+          <h4>Isolation is tested adversarially</h4>
+          <p>
+            An integration suite stands up two workspaces, ingests into both, and asserts that
+            vector search, document lookup and incident listing never cross. A second case
+            asserts the same across personas inside one workspace.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 5. Blast radius ────────────────────────────────────────────── -->
+    <section class="view" id="blast">
+      <div class="view-head">
+        <div class="eyebrow">Safety boundary</div>
+        <h2>Zero blast radius, by construction rather than by policy</h2>
+        <p class="deck">
+          The product's central promise is that the agents cannot break production. That
+          promise is worth only as much as its weakest enforcement, so it is held in three
+          different places: the tool contract has no mutating method to call, the registry
+          caps every probe, and remediation is emitted as text for a human to run.
+        </p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-bar">what an agent can and cannot reach</div>
+        <div class="panel-body">
+<pre class="mermaid">
+flowchart LR
+  AG["Specialist agent<br/>mid-hypothesis"]
+
+  subgraph CAN["Reachable — read-only"]
+    direction TB
+    R1["Its own persona's runbook chunks"]
+    R2["The incident's ingested telemetry"]
+    R3["Prometheus instant query"]
+    R4["CloudWatch Logs Insights"]
+  end
+
+  subgraph GATES["Enforcement"]
+    direction TB
+    G1["DiagnosticTool contract<br/>Name · Description · Execute<br/>no mutation method exists"]
+    G2["Registry timeout<br/>5s ceiling applied centrally,<br/>no adapter can opt out"]
+    G3["Degrade, never block<br/>failure becomes an 'unavailable'<br/>note in the prompt"]
+    G1 --> G2 --> G3
+  end
+
+  subgraph CANT["Unreachable"]
+    direction TB
+    X1["kubectl delete · rollout restart"]
+    X2["ALTER · DROP · pg_terminate_backend"]
+    X3["Cloud provider write APIs"]
+    X4["Another tenant's rows"]
+  end
+
+  HUM["Human operator<br/>runs the suggested command"]
+
+  AG --> G1
+  G3 --> R1
+  G3 --> R3
+  AG -. "emits as copy-paste text" .-> HUM
+  HUM --> X2
+  G3 x--x X1
+  G3 x--x X3
+  G3 x--x X4
+
+  classDef agent fill:#1B242E,stroke:#E3E9F0,color:#FFFFFF,stroke-width:2px;
+  classDef ok fill:#10241A,stroke:#4ADE80,color:#E3E9F0;
+  classDef gate fill:#2A1F10,stroke:#F5A524,color:#E3E9F0;
+  classDef no fill:#2A1519,stroke:#E5484D,color:#E3E9F0,stroke-dasharray:5 4;
+  classDef human fill:#0F2233,stroke:#38BDF8,color:#E3E9F0;
+  class AG agent;
+  class R1,R2,R3,R4 ok;
+  class G1,G2,G3 gate;
+  class X1,X2,X3,X4 no;
+  class HUM human;
+</pre>
+        </div>
+      </div>
+
+      <div class="legend">
+        <span class="key" style="--sw:#4ADE80">Reachable, read-only</span>
+        <span class="key" style="--sw:#F5A524">Enforcement gate</span>
+        <span class="key" style="--sw:#E5484D">Structurally unreachable</span>
+        <span class="key" style="--sw:#38BDF8">Human in the loop</span>
+      </div>
+
+      <div class="notes-head">Talking points</div>
+      <div class="notes">
+        <div class="note">
+          <h4>The contract has no write verb</h4>
+          <p>
+            <code>DiagnosticTool</code> is three methods: a name, a description for the model,
+            and <code>Execute</code> returning a result. There is no <code>Apply</code>, no
+            <code>Mutate</code>. An adapter author cannot add one without changing an
+            interface that the whole engine compiles against.
+          </p>
+        </div>
+        <div class="note">
+          <h4>The timeout lives above the adapters</h4>
+          <p>
+            The registry wraps every call in a 5-second context before dispatch. A careless
+            adapter that ignores deadlines still gets cancelled, because the ceiling is not
+            the adapter's to honour.
+          </p>
+        </div>
+        <div class="note">
+          <h4>Remediation is advice, not action</h4>
+          <p>
+            Runbooks legitimately contain destructive commands — terminating hung backends,
+            for instance. The agent may quote one. It has no channel to execute one. The
+            gap between quoting and running is the entire security model, and it is a gap in
+            capability rather than in instruction.
+          </p>
+        </div>
+        <div class="note">
+          <h4>Enterprise review is the real constraint</h4>
+          <p>
+            A tool that needs cluster-admin credentials faces a six-to-twelve month security
+            review. A tool that needs a Slack app and read-only metrics access does not. The
+            posture is a go-to-market decision as much as a safety one.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 6. Simulation ──────────────────────────────────────────────── -->
+    <section class="view" id="sim">
+      <div class="view-head">
+        <div class="eyebrow">Verification</div>
+        <h2>Reproducing an outage without having one</h2>
+        <p class="deck">
+          A multi-agent debate is hard to test: the output is prose, the input is a
+          production disaster, and the model is non-deterministic. The simulation framework
+          splits the problem — deterministic fixtures with known ground truth, and two run
+          modes that prove different things.
+        </p>
+      </div>
+
+      <div class="panel">
+        <div class="panel-bar">task incident:simulate</div>
+        <div class="panel-body">
+<pre class="mermaid">
+flowchart TB
+  FIX["Scenario fixture · testdata/scenarios/*.json<br/>runbooks for all 4 personas · error logs · stack traces<br/>metrics · ground-truth classification &amp; owner"]
+
+  SEED["Seed a throwaway workspace<br/>4 personas · runbooks chunked, embedded, indexed"]
+  FIRE["Fire the scenario as a webhook or slash command"]
+  RUN["Run the real clash engine<br/>same code path as production"]
+
+  MODE{"Which provider?"}
+  OFF["OFFLINE — stub chat + hashing embedder<br/>free, deterministic, no network"]
+  LIVE["LIVE — Claude Opus 5 + real embeddings"]
+
+  subgraph ASSERT_A["Asserted in both modes"]
+    direction TB
+    A1["Every specialist cited only its own persona's chunks"]
+    A2["Stage 1 and Stage 2 turns persisted, in order"]
+    A3["Citations resolve to chunks that were really shown"]
+    A4["A failing specialist degrades, does not abort"]
+  end
+
+  subgraph ASSERT_B["Asserted only when live"]
+    direction TB
+    B1["Classification matches the fixture's ground truth"]
+    B2["Owning domain matches"]
+    B3["Expected diagnostic queries surface"]
+  end
+
+  SANDBOX["Sandbox replay · isolated containers<br/>recreate the failure conditions to test a fix"]
+
+  FIX --> SEED --> FIRE --> RUN --> MODE
+  MODE -->|default| OFF
+  OFF --> A1
+  MODE -->|"--live"| LIVE
+  LIVE --> A1
+  LIVE --> B1
+  FIX -. "same parameters" .-> SANDBOX
+
+  classDef fixture fill:#10241A,stroke:#4ADE80,color:#E3E9F0;
+  classDef run fill:#1E1733,stroke:#A78BFA,color:#E3E9F0;
+  classDef gate fill:#2A1F10,stroke:#F5A524,color:#E3E9F0;
+  classDef wiring fill:#0F2233,stroke:#38BDF8,color:#E3E9F0;
+  classDef quality fill:#2A1519,stroke:#FB7185,color:#E3E9F0;
+  class FIX,SEED fixture;
+  class FIRE,RUN,SANDBOX run;
+  class MODE,OFF,LIVE gate;
+  class A1,A2,A3,A4 wiring;
+  class B1,B2,B3 quality;
+</pre>
+        </div>
+      </div>
+
+      <div class="legend">
+        <span class="key" style="--sw:#4ADE80">Fixture &amp; seeding</span>
+        <span class="key" style="--sw:#A78BFA">Execution</span>
+        <span class="key" style="--sw:#F5A524">Run-mode gate</span>
+        <span class="key" style="--sw:#38BDF8">Wiring assertions</span>
+        <span class="key" style="--sw:#FB7185">Diagnosis-quality assertions</span>
+      </div>
+
+      <div class="notes-head">Talking points</div>
+      <div class="notes">
+        <div class="note">
+          <h4>Offline mode proves plumbing, never judgement</h4>
+          <p>
+            The stub returns schema-valid JSON with a constant classification. That is enough
+            to exercise retrieval scoping, citation filtering and persistence on every commit
+            — and it is deliberately incapable of validating diagnosis, so no one is tempted
+            to read a green CI run as evidence the agents are correct.
+          </p>
+        </div>
+        <div class="note">
+          <h4>The fake embedder still ranks</h4>
+          <p>
+            It hashes tokens into buckets and normalises, so cosine similarity tracks lexical
+            overlap. Retrieval returns plausibly-ordered neighbours offline, which is what
+            makes the wiring assertions meaningful rather than trivially true.
+          </p>
+        </div>
+        <div class="note">
+          <h4>Fixtures carry ground truth</h4>
+          <p>
+            Each scenario states its true classification and owning domain. The set spans all
+            three failure modes on purpose: a pure-infra packet-loss event, a code-level
+            transaction leak, and a hybrid OOM crashloop where a code defect exhausted an
+            infrastructure limit.
+          </p>
+        </div>
+        <div class="note">
+          <h4>Hybrid is the hard case</h4>
+          <p>
+            Pure infra and pure code are relatively easy to separate. The failure mode worth
+            benchmarking is the one where a release caused the capacity problem — which is
+            precisely where a single flattened summary tends to blame the symptom.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Build status ───────────────────────────────────────────────── -->
+    <section class="view" id="status">
+      <div class="view-head">
+        <div class="eyebrow">Honest state</div>
+        <h2>What exists today</h2>
+        <p class="deck">
+          Everything above is the intended architecture. The table below separates what
+          compiles and passes <code>go test -race</code> today from what is written but not
+          yet exercised against real infrastructure, and what does not exist at all.
+        </p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Component</th><th>State</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Schema &amp; embedded migrations</td><td><span class="state built">Built</span></td><td>Four migration pairs, HNSW + GIN indices, <code>updated_at</code> triggers, applied on boot</td></tr>
+            <tr><td>Domain entities &amp; value objects</td><td><span class="state built">Built</span></td><td>13 value objects, 7 entities, invariants enforced at construction, no driver imports</td></tr>
+            <tr><td>PostgreSQL repositories</td><td><span class="state built">Built</span></td><td>All six, plus RRF hybrid search, <code>CopyFrom</code> batch insert and a context-bound transaction manager</td></tr>
+            <tr><td>Multi-tenant isolation suite</td><td><span class="state built">Built</span></td><td>Runs against a live database when <code>CRIAISIS_TEST_INTEGRATION</code> is set; skips otherwise</td></tr>
+            <tr><td>LLM layer</td><td><span class="state built">Built</span></td><td>Claude chat provider, OpenAI-compatible embeddings, deterministic offline fakes</td></tr>
+            <tr><td>Chunking &amp; ingestion service</td><td><span class="state built">Built</span></td><td>Fence-aware splitter with overlap; status transitions to indexed or failed, never stuck pending</td></tr>
+            <tr><td>2-stage clash orchestrator</td><td><span class="state built">Built</span></td><td>Stages 1–3, structured outputs, citation filtering, graceful degradation, covered by tests</td></tr>
+            <tr><td>MCP diagnostic adapters</td><td><span class="state built">Built</span></td><td>Registry with enforced 5s cap and graceful probe failure; Prometheus adapter implemented</td></tr>
+            <tr><td>Scenario fixtures</td><td><span class="state built">Built</span></td><td>Three scenarios spanning infra, code and hybrid root causes</td></tr>
+            <tr><td>Job queue &amp; server container</td><td><span class="state built">Built</span></td><td>Buffered worker pool with backpressure and panic containment; container with reverse-order shutdown</td></tr>
+            <tr><td>Alert webhook handler</td><td><span class="state built">Built</span></td><td>Grafana and CloudWatch parsing, per-workspace token verified in constant time, 503 under saturation</td></tr>
+            <tr><td>Simulation runner</td><td><span class="state part">Untested</span></td><td><code>task incident:simulate</code> compiles and runs to the database boundary; the full path needs a live pgvector instance</td></tr>
+            <tr><td>Sandbox reproduction</td><td><span class="state part">Untested</span></td><td>Compose profiles per scenario and a driver script; container run needs a running Docker daemon</td></tr>
+            <tr><td>Composition root</td><td><span class="state built">Built</span></td><td><code>cmd/criaisis</code> wires the chain, applies migrations on boot and shuts down gracefully</td></tr>
+            <tr><td>Slack app &amp; web dashboard</td><td><span class="state planned">Planned</span></td><td>OAuth install, Block Kit rendering, runbook management and transcript viewer</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ── Delivers ───────────────────────────────────────────────────── -->
+    <section class="view" id="delivers">
+      <div class="view-head">
+        <div class="eyebrow">Outcomes</div>
+        <h2>What it delivers, and to whom</h2>
+      </div>
+
+      <div class="deliver">
+        <div class="persona-card" style="--pc:#F5A524">
+          <div class="role">Incident Commander</div>
+          <h4>A cross-domain hypothesis before the specialists wake up</h4>
+          <p>
+            Four grounded opinions and a reasoned verdict inside the thread, in about the time
+            it takes to open a dashboard — with the contradictions named rather than averaged
+            away, and a root cause labelled code, infra, or hybrid so the page goes to the
+            right team first.
+          </p>
+        </div>
+        <div class="persona-card" style="--pc:#A78BFA">
+          <div class="role">Platform / SRE admin</div>
+          <h4>Runbooks that earn their keep</h4>
+          <p>
+            Documentation stops being a wiki nobody opens at 3am and becomes the retrieval
+            corpus behind every hypothesis. Gaps announce themselves: a persona with no
+            relevant runbook says so and reports no confidence, rather than improvising.
+          </p>
+        </div>
+        <div class="persona-card" style="--pc:#38BDF8">
+          <div class="role">Paged specialist</div>
+          <h4>Catch-up without re-litigating</h4>
+          <p>
+            Joining mid-incident means reading a transcript that shows what was ruled in, what
+            was ruled out, and the exact runbook excerpt behind each call — then asking one
+            persona directly with an @mention.
+          </p>
+        </div>
+        <div class="persona-card" style="--pc:#4ADE80">
+          <div class="role">The organisation</div>
+          <h4>Post-mortems that survive the runbook</h4>
+          <p>
+            Every debate is an append-only record with immutable citation snapshots. Months
+            later, when the documentation has moved on, the transcript still shows exactly
+            what the agents read and concluded.
+          </p>
+        </div>
+      </div>
+
+      <div class="colophon">
+        <span>criAIsis · architecture walkthrough</span>
+        <span>Go 1.27 · PostgreSQL 16 + pgvector · Claude Opus 5</span>
+        <span>Read-only diagnostic posture</span>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+// Track which view is on screen and reflect it in the rail.
+(function () {
+  var links = Array.prototype.slice.call(document.querySelectorAll(".rail-nav a"));
+  var byId = {};
+  links.forEach(function (a) { byId[a.getAttribute("href").slice(1)] = a; });
+
+  var observer = new IntersectionObserver(function (entries) {
+    entries.forEach(function (entry) {
+      if (!entry.isIntersecting) return;
+      links.forEach(function (a) { a.classList.remove("active"); });
+      var active = byId[entry.target.id];
+      if (active) active.classList.add("active");
+    });
+  }, { rootMargin: "-12% 0px -72% 0px", threshold: 0 });
+
+  document.querySelectorAll(".view").forEach(function (section) { observer.observe(section); });
+})();
+</script>
+
+<!-- Mermaid runtime. The published artifact renders .mermaid blocks natively;
+     this standalone copy loads the library itself, so it needs network access.
+     If it cannot load, the diagram source stays readable as plain text. -->
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: "base",
+    securityLevel: "loose",
+    // htmlLabels:false renders labels as SVG <text>. With htmlLabels:true the
+    // label lives in a <foreignObject>, which clips its own content, and page
+    // CSS leaks into it. Set here rather than per-diagram, because a
+    // %%{init}%% directive resets flowchart config back to its defaults.
+    flowchart: { htmlLabels: false, useMaxWidth: true, nodeSpacing: 44, rankSpacing: 52 },
+    themeVariables: {
+      background: "#121821",
+      primaryColor: "#18212C",
+      primaryTextColor: "#E3E9F0",
+      primaryBorderColor: "#26303B",
+      lineColor: "#5F6C7B",
+      fontFamily: "IBM Plex Sans, sans-serif",
+      fontSize: "13px",
+      clusterBkg: "#0E141B",
+      clusterBorder: "#26303B",
+      edgeLabelBackground: "#0B0F14"
+    }
+  });
+  // Render only once the webfonts have loaded. Mermaid measures label widths at
+  // render time; measuring against the fallback face and then swapping in the
+  // wider webfont is what clips node text.
+  if (document.fonts && document.fonts.ready) { await document.fonts.ready; }
+  await mermaid.run({ querySelector: "pre.mermaid" });
+</script>
+<script>
+  // Surface a clear note rather than a wall of raw diagram source if the CDN is unreachable.
+  window.addEventListener("load", function () {
+    setTimeout(function () {
+      document.querySelectorAll("pre.mermaid").forEach(function (el) {
+        if (el.querySelector("svg")) return;
+        el.dataset.unrendered = "true";
+      });
+      if (document.querySelector('pre.mermaid[data-unrendered]')) {
+        var n = document.createElement("div");
+        n.className = "offline-note";
+        n.textContent = "Diagrams need network access to load the Mermaid library. The source below each panel is still readable.";
+        document.querySelector(".main").prepend(n);
+      }
+    }, 2500);
+  });
+</script>
+</body>
+</html>
