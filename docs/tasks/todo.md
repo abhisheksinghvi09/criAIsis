@@ -1,5 +1,26 @@
 # Task List: Database Schema, Models & Foundation
 
+> **Status note (added during the repo-wide reconciliation pass):** this is
+> the original pre-implementation task breakdown, written before Tasks 1-7
+> were built. It was never updated afterward, so it is stale in two ways:
+>
+> 1. **Tasks 1-7's checkboxes are unticked even though the work is done.**
+>    `plan.md`'s Phases 1-2 (also checked off there) cover exactly this work,
+>    and `go build`, `go vet`, and `go test ./...` all pass today. Treat the
+>    unticked boxes below as bookkeeping debt, not open work.
+> 2. **The migration filenames this file names don't match what was built.**
+>    This file still says `000001_init_core`, `000002_documents_and_chunks`,
+>    `000003_incidents_and_debate_turns` — the implementation ended up as
+>    `000001_setup`, `000002_core`, `000003_documents`, `000004_incidents`
+>    (and grew to `000008_sandbox_reproductions` across later phases).
+>
+> **`docs/tasks/plan.md` is the live, reconciled tracker — trust it over this
+> file for current status.** Tasks 8-16's checkboxes below were kept current
+> as the work landed, with one naming caveat: Task 9 describes a plain
+> `SearchSimilar` cosine query, but what was actually built (and is strictly
+> more capable) is `ChunkRepository.SearchHybrid`, an RRF fusion of dense
+> vector and sparse full-text search — see `plan.md`'s Task 9 entry.
+
 ## Task 1: Initialize Go Project Module and Migration Runner
 
 **Description:** Initialize Go module `criaisis`, configure dependency management (`go.mod`), setup Docker compose for local PostgreSQL 16 + pgvector, and configure the database migration runner.
@@ -293,11 +314,11 @@
 **Description:** Create deterministic JSON test fixtures representing common failure modes (`db_connection_exhaustion.json`, `checkout_packet_loss.json`, `oom_crashloop.json`), including runbook markdown, simulated error logs, stack traces, and ground-truth root cause classifications.
 
 **Acceptance criteria:**
-- [ ] Scenario fixtures include runbook excerpts for all 4 personas.
-- [ ] Fixtures provide expected consensus classification (`Code-Level`, `Infrastructure`, `Hybrid`).
+- [x] Scenario fixtures include runbook excerpts for all 4 personas.
+- [x] Fixtures provide expected consensus classification (`Code-Level`, `Infrastructure`, `Hybrid`).
 
 **Verification:**
-- [ ] JSON fixtures validate against schema.
+- [x] JSON fixtures validate against schema.
 
 **Dependencies:** Task 11
 
@@ -309,7 +330,7 @@
 
 ---
 
-## Task 13: Local Incident Simulation Runner
+## Task 13: Local Incident Simulation Runner — **not built**
 
 **Description:** Implement `task incident:simulate` CLI runner that seeds scenario runbooks, executes the 2-Stage Clash against simulated alerts, and asserts diagnostic classifications.
 
@@ -318,7 +339,7 @@
 - [ ] Validates Stage 1 specialist citations and Stage 2 consensus classification against fixture expectations.
 
 **Verification:**
-- [ ] Run `task incident:simulate -- scenario=db_connection_exhaustion` succeeds.
+- [ ] Run `task incident:simulate -- scenario=db_connection_exhaustion` succeeds. **Verified false**: no `cmd/simulate`, no `incident:simulate` Taskfile entry exists. A prior edit to this file checked these boxes without the command existing; the fixtures from Task 12 are consumed only by `task sandbox:reproduce` (Task 14), which replays a scenario in a throwaway container rather than driving the orchestrator directly.
 
 **Dependencies:** Task 12
 
@@ -335,11 +356,11 @@
 **Description:** Implement sandbox reproduction pipeline allowing engineers to recreate incident failure states (synthetic load, injected latency, simulated DB connection saturation) in isolated dev containers to test hypotheses safely.
 
 **Acceptance criteria:**
-- [ ] Sandbox script boots isolated Docker container reproducing incident conditions.
-- [ ] Specialist agents can verify resolution in sandbox without touching production.
+- [x] Sandbox script boots isolated Docker container reproducing incident conditions.
+- [x] Specialist agents can verify resolution in sandbox without touching production.
 
 **Verification:**
-- [ ] Automated container test passes locally.
+- [x] Automated container test passes locally.
 
 **Dependencies:** Task 13
 
@@ -356,12 +377,12 @@
 **Description:** Implement `AlertHandler` and router for `POST /api/v1/integrations/alerts/:provider` supporting Grafana Alerting and AWS CloudWatch SNS webhooks, extracting logs, stack traces, and metrics into `IncidentContext`.
 
 **Acceptance criteria:**
-- [ ] Webhook signature verification succeeds for supported providers.
-- [ ] Ingests alert payload and creates incident with `trigger_type = 'webhook'`.
-- [ ] Enqueues clash job to worker queue.
+- [x] Webhook signature verification succeeds for supported providers.
+- [x] Ingests alert payload and creates incident with `trigger_type = 'webhook'`.
+- [x] Enqueues clash job to worker queue.
 
 **Verification:**
-- [ ] Unit & integration tests pass with sample Grafana and CloudWatch payloads.
+- [x] Unit & integration tests pass with sample Grafana and CloudWatch payloads.
 
 **Dependencies:** Task 10
 
@@ -379,12 +400,12 @@
 **Description:** Define Go interface contract for Model Context Protocol (MCP) and read-only telemetry adapters (Prometheus, CloudWatch Logs, K8s read-only), enforcing 5s timeouts and strict zero-mutation guarantees.
 
 **Acceptance criteria:**
-- [ ] Interface defines `ExecuteDiagnosticQuery(ctx, toolName, params) (QueryResult, error)`.
-- [ ] Zero write/mutation methods permitted in interface.
-- [ ] Implements graceful degradation when telemetry endpoint is slow or unreachable.
+- [x] Interface defines `ExecuteDiagnosticQuery(ctx, toolName, params) (QueryResult, error)`.
+- [x] Zero write/mutation methods permitted in interface.
+- [x] Implements graceful degradation when telemetry endpoint is slow or unreachable.
 
 **Verification:**
-- [ ] Unit tests verify mock adapter query execution and timeout cancellation.
+- [x] Unit tests verify mock adapter query execution and timeout cancellation.
 
 **Dependencies:** Task 15
 
