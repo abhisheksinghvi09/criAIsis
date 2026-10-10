@@ -171,20 +171,26 @@ tasks:
       - go mod verify
 
   test:
-    desc: run all Go tests with race detection
+    desc: run all Go tests with race detection and coverage
     cmds:
-      - go test -race ./...
+      - go test -race -cover ./...
 
   test:integration:
     desc: run tests including the ones that need a live database
     cmds:
-      - CRIAISIS_TEST_INTEGRATION=1 go test -race ./...
+      - CRIAISIS_TEST_INTEGRATION=1 go test -race -cover ./...
+
+  lint:
+    desc: run golangci-lint (gosec, unconvert, unparam plus the default set)
+    cmds:
+      - golangci-lint run ./...
 
   check:
-    desc: build, vet and test everything, backend and dashboard
+    desc: build, vet, lint and test everything, backend and dashboard
     cmds:
       - go build ./...
       - go vet ./...
+      - task: lint
       - task: test
       - task: web:test
       - task: web:build

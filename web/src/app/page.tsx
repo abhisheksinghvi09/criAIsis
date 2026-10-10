@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { AuthGate } from "@/components/AuthGate";
 import { Shell } from "@/components/Shell";
-import { Card, Check, ClassificationBadge, Empty, SeverityBadge, Stat, formatTime } from "@/components/ui";
+import { Card, Check, Empty, SeverityBadge, Stat, formatTime } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useCredentials } from "@/lib/session";
 import { useResource } from "@/lib/useApi";

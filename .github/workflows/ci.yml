@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Local-only deploy per team.md: this workflow builds, lints, tests, and scans.
+# It does not deploy anywhere - no target environment exists yet.
+jobs:
+  backend:
+    name: Backend (Go)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: criaisis
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d criaisis"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CRIAISIS_PRIMARY_ENV: test
+      CRIAISIS_SERVER_PORT: "8088"
+      CRIAISIS_SERVER_CORS_ALLOWED_ORIGINS: "http://localhost:5173"
+      CRIAISIS_DATABASE_HOST: localhost
+      CRIAISIS_DATABASE_PORT: "5432"
+      CRIAISIS_DATABASE_USER: postgres
+      CRIAISIS_DATABASE_PASSWORD: postgres
+      CRIAISIS_DATABASE_NAME: criaisis
+      CRIAISIS_SECURITY_CREDENTIAL_ENCRYPTION_KEY: "ci-test-key-exactly-32-bytes-ok"
+      CRIAISIS_SECURITY_ADMIN_API_KEY: "ci-test-admin-key-not-a-real-secret"
+      CRIAISIS_LLM_SPECIALIST_MODEL: claude-opus-5
+      CRIAISIS_LLM_SYNTHESIS_MODEL: claude-opus-5
+      CRIAISIS_LLM_EMBEDDING_MODEL: text-embedding-3-small
+      CRIAISIS_LLM_EMBEDDING_BASE_URL: https://api.openai.com/v1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Lint (golangci-lint, gosec enabled)
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.5.0
+
+      - name: Vulnerability scan (govulncheck)
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+      - name: Unit tests (race, coverage)
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Enforce coverage floor
+        run: |
+          total=$(go tool cover -func=coverage.out | tail -1 | grep -oE '[0-9]+\.[0-9]+')
+          echo "Total coverage: ${total}%"
+          # ponytail: this is a ratchet at the measured starting point (47.7% at
+          # introduction), not the org's mandated 80% floor - raise it as more
+          # packages gain tests, rather than letting coverage silently regress
+          # below where it already stands. See project.md's Mandated section.
+          floor=47.0
+          awk -v t="$total" -v f="$floor" 'BEGIN { exit !(t >= f) }' \
+            || { echo "coverage ${total}% is below the ${floor}% floor"; exit 1; }
+
+      - name: Migrate database for integration tests
+        run: go run ./cmd/criaisis -migrate-only
+
+      - name: Integration tests (live pgvector)
+        run: CRIAISIS_TEST_INTEGRATION=1 go test -race ./...
+
+  secrets-scan:
+    name: Secret scan (TruffleHog)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: trufflesecurity/trufflehog@main
+        with:
+          extra_args: --results=verified,unknown
+
+  web:
+    name: Dashboard (Next.js)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
