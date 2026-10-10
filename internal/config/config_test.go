@@ -94,6 +94,50 @@ func TestLoadConfigFromEnviron_InvalidEncryptionKeyLength(t *testing.T) {
 	}
 }
 
+// The struct tag's len=32 counts runes; AES-256 (and crypto.New) counts bytes.
+// A key built from 32 multi-byte runes is exactly 32 runes but far more than
+// 32 bytes, so it must still be rejected here rather than passing validation
+// and failing later at cipher construction with a worse error.
+func TestLoadConfigFromEnviron_RejectsMultibyteEncryptionKeyOfRightRuneCount(t *testing.T) {
+	env := validEnviron()
+	multibyteKey := strings.Repeat("é", 32) // 32 runes, 64 bytes (é is 2 bytes in UTF-8)
+	for i, v := range env {
+		if strings.HasPrefix(v, "CRIAISIS_SECURITY_CREDENTIAL_ENCRYPTION_KEY=") {
+			env[i] = "CRIAISIS_SECURITY_CREDENTIAL_ENCRYPTION_KEY=" + multibyteKey
+		}
+	}
+
+	if _, err := LoadConfigFromEnviron(env); err == nil {
+		t.Fatal("expected a 32-rune/64-byte key to be rejected, got nil")
+	}
+}
+
+// database.ssl_mode defaults to "disable" for local dev; that default must never
+// reach a production deploy, where it would mean every decrypted tenant
+// credential travels to Postgres in plaintext.
+func TestLoadConfigFromEnviron_RejectsDisabledSSLInProduction(t *testing.T) {
+	env := validEnviron()
+	for i, v := range env {
+		switch {
+		case strings.HasPrefix(v, "CRIAISIS_PRIMARY_ENV="):
+			env[i] = "CRIAISIS_PRIMARY_ENV=production"
+		case strings.HasPrefix(v, "CRIAISIS_DATABASE_SSL_MODE="):
+			env[i] = "CRIAISIS_DATABASE_SSL_MODE=disable"
+		}
+	}
+
+	if _, err := LoadConfigFromEnviron(env); err == nil {
+		t.Fatal("expected ssl_mode=disable to be rejected when env=production")
+	}
+}
+
+func TestLoadConfigFromEnviron_AllowsDisabledSSLOutsideProduction(t *testing.T) {
+	env := validEnviron() // primary.env=local, ssl_mode=disable, already set
+	if _, err := LoadConfigFromEnviron(env); err != nil {
+		t.Fatalf("expected ssl_mode=disable to be fine outside production, got: %v", err)
+	}
+}
+
 // criAIsis is bring-your-own-key: there must be no platform-wide model credential
 // in configuration for a tenant to accidentally ride on.
 func TestConfig_CarriesNoPlatformModelKey(t *testing.T) {
@@ -138,6 +182,23 @@ func TestDatabaseConfig_DSN(t *testing.T) {
 
 	dsn := db.DSN()
 	expected := "postgres://app_user:p%40ss%3Aw%2Ford@db.example.com:5432/criaisis_prod?sslmode=require"
+	if dsn != expected {
+		t.Errorf("expected DSN '%s', got '%s'", expected, dsn)
+	}
+}
+
+// A password containing a space must round-trip to a real space, not "+":
+// url.QueryEscape (query-string rules) would encode it as "+", a literal
+// character in a URL's userinfo component - so the stored password and the
+// password the driver actually sends would silently differ.
+func TestDatabaseConfig_DSN_PasswordWithSpace(t *testing.T) {
+	db := DatabaseConfig{
+		Host: "db.example.com", Port: 5432, User: "app_user",
+		Password: "pass with space", Name: "criaisis_prod", SSLMode: "require",
+	}
+
+	dsn := db.DSN()
+	expected := "postgres://app_user:pass%20with%20space@db.example.com:5432/criaisis_prod?sslmode=require"
 	if dsn != expected {
 		t.Errorf("expected DSN '%s', got '%s'", expected, dsn)
 	}

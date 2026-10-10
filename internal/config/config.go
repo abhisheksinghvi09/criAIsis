@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -18,10 +19,8 @@ var defaults = map[string]any{
 	"server.read_timeout":         15,
 	"server.write_timeout":        30,
 	"server.idle_timeout":         60,
-	"llm.provider":                "anthropic",
 	"llm.specialist_model":        "claude-opus-5",
 	"llm.synthesis_model":         "claude-opus-5",
-	"llm.embedding_provider":      "openai",
 	"llm.embedding_model":         "text-embedding-3-small",
 	"llm.embedding_base_url":      "https://api.openai.com/v1",
 	"database.ssl_mode":           "disable",
@@ -122,6 +121,22 @@ func LoadConfigFromEnviron(environ []string) (*Config, error) {
 	// Fail fast: execute validation rules across all struct tags
 	if err := validator.New().Struct(&mainConfig); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
+	}
+
+	// The struct tag's len=32 counts runes, but crypto.New (and AES-256) counts
+	// bytes: a 32-rune key containing any multi-byte UTF-8 character would pass
+	// the tag and then fail at cipher construction instead of here, with a less
+	// useful error. Check the byte length explicitly for the same fail-fast
+	// guarantee the rest of this function promises.
+	if n := len(mainConfig.Security.CredentialEncryptionKey); n != 32 {
+		return nil, fmt.Errorf("config validation failed: credential_encryption_key must be exactly 32 bytes, got %d", n)
+	}
+
+	// database.ssl_mode defaults to "disable" for local dev convenience, but
+	// that default must never reach a production deploy: it would mean every
+	// tenant credential decrypted in memory travels to Postgres in plaintext.
+	if mainConfig.Primary.Env == "production" && mainConfig.Database.SSLMode == "disable" {
+		return nil, errors.New("config validation failed: database.ssl_mode must not be \"disable\" when primary.env is \"production\"")
 	}
 
 	return &mainConfig, nil
