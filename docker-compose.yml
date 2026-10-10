@@ -1,0 +1,28 @@
+# Local development dependencies. The application itself runs on the host via
+# `task run`, so a code change does not require an image rebuild.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: criaisis-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: criaisis
+    ports:
+      # Published on a high port by default: 5432 is routinely taken by a native
+      # PostgreSQL install, another project's container, or an SSH tunnel, and the
+      # resulting bind failure is easy to misread as an application bug.
+      # Override with CRIAISIS_DB_HOST_PORT if you want the standard port.
+      - "${CRIAISIS_DB_HOST_PORT:-55432}:5432"
+    volumes:
+      - criaisis-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # pgvector must be loadable, not merely present: the schema fails to migrate
+      # without it, and that is better caught here than at boot.
+      test: ["CMD-SHELL", "pg_isready -U postgres -d criaisis && psql -U postgres -d criaisis -c 'CREATE EXTENSION IF NOT EXISTS vector' >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  criaisis-pgdata:

@@ -1,7 +1,16 @@
 version: '3'
 
+# Load local configuration automatically, so `task run` works straight after
+# `task setup:env` with nothing to remember about sourcing files.
+dotenv: ['.env']
+
 vars:
-  CRIAISIS_DB_DSN: '{{.CRIAISIS_DB_DSN | default ""}}'
+  # Compose ships either as a docker plugin ("docker compose") or as a standalone
+  # binary ("docker-compose"). Detect once instead of guessing at each call site.
+  COMPOSE:
+    sh: if docker compose version >/dev/null 2>&1; then echo "docker compose"; else echo "docker-compose"; fi
+  PORT: '{{.CRIAISIS_SERVER_PORT | default "8080"}}'
+  CRIAISIS_DB_DSN: '{{.CRIAISIS_DB_DSN | default "postgres://postgres:postgres@localhost:5432/criaisis?sslmode=disable"}}'
 
 tasks:
   help:
@@ -18,13 +27,71 @@ tasks:
     silent: true
     internal: true
 
+  setup:env:
+    desc: create .env from the template with freshly generated platform secrets
+    cmds:
+      - |
+        if [ -f .env ]; then
+          echo '.env already exists; leaving it alone.'
+          echo 'Delete it first if you want to regenerate the platform secrets.'
+          exit 0
+        fi
+        command -v openssl >/dev/null || { echo 'openssl is required to generate secrets' >&2; exit 1; }
+
+        ENC=$(openssl rand -hex 16)        # exactly 32 characters, as AES-256 requires
+        ADMIN=$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-40)
+
+        sed -e "s|^CRIAISIS_SECURITY_CREDENTIAL_ENCRYPTION_KEY=.*|CRIAISIS_SECURITY_CREDENTIAL_ENCRYPTION_KEY=$ENC|" \
+            -e "s|^CRIAISIS_SECURITY_ADMIN_API_KEY=.*|CRIAISIS_SECURITY_ADMIN_API_KEY=$ADMIN|" \
+            .env.example > .env
+
+        echo 'Created .env with generated platform secrets.'
+        echo
+        echo '  Encryption key : generated (rotating it makes stored tenant keys unreadable)'
+        echo "  Admin API key  : $ADMIN"
+        echo
+        echo 'Tenant model keys are NOT set here: each customer supplies their own'
+        echo 'through the dashboard. Next: task db:up && task run'
+
   run:
-    desc: run the cmd/criaisis application
+    desc: run the criAIsis API server
+    preconditions:
+      - sh: test -f .env
+        msg: "No .env found. Run `task setup:env` first."
     cmds:
       - go run ./cmd/criaisis
 
+  db:up:
+    desc: start the local PostgreSQL 16 + pgvector container
+    cmds:
+      - '{{.COMPOSE}} up -d postgres'
+      - echo 'waiting for postgres to accept connections...'
+      - |
+        for i in $(seq 1 30); do
+          if docker exec criaisis-postgres pg_isready -U postgres -d criaisis >/dev/null 2>&1; then
+            echo 'postgres ready'; exit 0
+          fi
+          sleep 1
+        done
+        echo 'postgres did not become ready in time' >&2
+        echo 'If the container failed to start, check whether the host port is already in use:' >&2
+        echo '  lsof -nP -iTCP:${CRIAISIS_DB_HOST_PORT:-55432} -sTCP:LISTEN' >&2
+        exit 1
+
+  db:down:
+    desc: stop the local database container (data volume is preserved)
+    cmds:
+      - '{{.COMPOSE}} down'
+
+  db:reset:
+    desc: destroy the local database volume and recreate it from scratch
+    deps: [ confirm ]
+    cmds:
+      - '{{.COMPOSE}} down -v'
+      - task: db:up
+
   migrations:new:
-    desc: create a new database migration
+    desc: create a new migration pair (task migrations:new name=add_thing)
     vars:
       NAME: '{{.name | default ""}}'
     cmds:
@@ -34,18 +101,67 @@ tasks:
           echo "Usage: task migrations:new name=migration_name"
           exit 1
         fi
-      - echo 'Creating migration file for {{.NAME}}...'
-      - tern new -m ./internal/database/migrations {{.NAME}}
+        # golang-migrate numbering: the binary embeds and applies these on boot,
+        # so the file names must match what the iofs source driver expects.
+        DIR=./internal/database/migrations
+        NEXT=$(printf '%06d' $(( $(ls $DIR | grep -oE '^[0-9]+' | sort -n | tail -1 | sed 's/^0*//') + 1 )))
+        touch "$DIR/${NEXT}_{{.NAME}}.up.sql" "$DIR/${NEXT}_{{.NAME}}.down.sql"
+        echo "created $DIR/${NEXT}_{{.NAME}}.{up,down}.sql"
 
   migrations:up:
-    desc: apply all up database migrations
-    deps: [ confirm ]
+    desc: apply pending migrations (the server also does this automatically on boot)
     cmds:
-      - echo 'Running up migrations...'
-      - tern migrate -m ./internal/database/migrations --conn-string {{.CRIAISIS_DB_DSN}}
+      - go run ./cmd/criaisis -migrate-only
+
+  sandbox:reproduce:
+    desc: 'reproduce an incident condition in throwaway containers (task sandbox:reproduce -- oom_crashloop)'
+    cmds:
+      - ./scripts/sandbox_reproduce.sh {{.CLI_ARGS}}
+
+  workspace:create:
+    desc: 'create a customer workspace (task workspace:create -- acme "Acme Engineering")'
+    cmds:
+      - |
+        ARGS="{{.CLI_ARGS}}"
+        TEAM=$(echo $ARGS | awk '{print $1}')
+        NAME=$(echo $ARGS | cut -d' ' -f2-)
+        if [ -z "$TEAM" ]; then
+          echo "Usage: task workspace:create -- <team-id> <display name>"
+          exit 1
+        fi
+        curl -sS -X POST "http://localhost:{{.PORT}}/api/v1/workspaces/" \
+          -H "Authorization: Bearer $CRIAISIS_SECURITY_ADMIN_API_KEY" \
+          -H 'Content-Type: application/json' \
+          -d "{\"team_id\":\"$TEAM\",\"name\":\"$NAME\"}"
+        echo
+
+  web:install:
+    desc: install dashboard dependencies
+    dir: web
+    cmds:
+      - npm install --no-audit --no-fund
+
+  web:dev:
+    desc: run the dashboard against a local API (http://localhost:3000)
+    dir: web
+    cmds:
+      - npm run dev
+
+  web:test:
+    desc: run web dashboard automated unit and smoke tests
+    dir: web
+    cmds:
+      - npm run test
+
+  web:build:
+    desc: type-check and build the dashboard
+    dir: web
+    cmds:
+      - npm run typecheck
+      - npm run build
 
   tidy:
-    desc: format all .go files, and tidy and vendor module dependencies
+    desc: format all .go files, and tidy and verify module dependencies
     cmds:
       - echo 'Formatting .go files...'
       - go fmt ./...
@@ -57,4 +173,18 @@ tasks:
   test:
     desc: run all Go tests with race detection
     cmds:
-      - go test -v -race ./...
+      - go test -race ./...
+
+  test:integration:
+    desc: run tests including the ones that need a live database
+    cmds:
+      - CRIAISIS_TEST_INTEGRATION=1 go test -race ./...
+
+  check:
+    desc: build, vet and test everything, backend and dashboard
+    cmds:
+      - go build ./...
+      - go vet ./...
+      - task: test
+      - task: web:test
+      - task: web:build

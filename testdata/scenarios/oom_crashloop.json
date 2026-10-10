@@ -1,0 +1,48 @@
+{
+  "id": "scenario-oom-crashloop",
+  "title": "Kubernetes OOMKilled CrashLoopBackOff on Document Ingestion Worker",
+  "description": "Document ingestion pods are being killed with exit code 137 (OOMKilled) after memory consumption exceeds the 2Gi limit within 90 seconds of startup. Ingestion queue is backing up.",
+  "severity": "sev-2",
+  "trigger_type": "webhook",
+  "context": {
+    "failing_service": "ingestion-worker",
+    "error_logs": [
+      "2026-09-17T00:20:01Z [k8s-kubelet] OOMKilled: container ingestion-worker exceeded memory limit (2147483648 bytes)",
+      "2026-09-17T00:20:05Z [k8s-pod] Back-off 20s restarting failed container ingestion-worker in pod ingestion-worker-7d8b5b-kx49",
+      "2026-09-17T00:20:12Z [ingestion-worker] unmarshaling 45MB PDF document chunk batch into memory"
+    ],
+    "stack_traces": [
+      "runtime.makeslice\n\t/usr/local/go/src/runtime/slice.go:105\ngithub.com/shop/ingestion/internal/parser.ExtractTextChunks\n\t/app/internal/parser/pdf.go:142\ngithub.com/shop/ingestion/internal/worker.ProcessJob\n\t/app/internal/worker/job.go:67"
+    ],
+    "metrics": {
+      "container_memory_working_set_bytes": 2147483648,
+      "container_restart_count": 8,
+      "queue_depth_pending_documents": 1450,
+      "oom_kill_events_total": 8
+    }
+  },
+  "runbooks": {
+    "network": {
+      "title": "Cluster Networking and Pod Readiness Probes",
+      "raw_content": "# Network Diagnostics Runbook\n\n## Pod Restart vs Network Fault\nA pod terminating with exit code 137 is killed by the kernel cgroup OOM killer, not by a network fault. Before suspecting the network layer, confirm the CNI is healthy:\n```bash\nkubectl get pods -n kube-system -l k8s-app=cilium\nkubectl exec -it <pod> -- wget -qO- http://ingestion-worker:8080/healthz\n```\nIf readiness probes only fail during the restart window and service endpoints recover between restarts, the network layer is healthy and the fault is in the workload itself."
+    },
+    "database": {
+      "title": "Ingestion Queue and Chunk Insertion Latency",
+      "raw_content": "# Database Ingestion Queue Runbook\nVerify that PostgreSQL is not blocking chunk insertions:\n```sql\nSELECT count(*) FROM documents WHERE status = 'pending';\n```"
+    },
+    "application": {
+      "title": "Document Ingestion Worker Memory Profiling",
+      "raw_content": "# Ingestion Worker Memory Leak Runbook\n\n## Root Cause\nPDF parser loads the entire document into an unbounded byte slice instead of streaming chunks via `io.Reader`. When parsing documents > 30MB with embedded images, the Go heap inflates exponentially, triggering kernel cgroups OOM killer.\n\n## Remediation\n1. Replace `io.ReadAll` with buffered streaming parser in `ExtractTextChunks`.\n2. In the interim, increase Kubernetes container memory limits from 2Gi to 4Gi.\n\n## Kubernetes Resource Limits\n## Verification\nInspect pod events and resource quota saturation:\n```bash\nkubectl describe pod -l app=ingestion-worker\nkubectl top pod -l app=ingestion-worker\n```"
+    },
+    "security": {
+      "title": "Malicious Payload and Zip-Bomb Detection",
+      "raw_content": "# Security Runbook: Decompression Bomb Inspection\nConfirm that uploaded PDF files do not contain nested gzip bombs targeting parser memory allocation."
+    }
+  },
+  "expected_classification": "hybrid",
+  "expected_owner": "application",
+  "expected_diagnostic_queries": [
+    "kubectl describe pod -l app=ingestion-worker",
+    "kubectl logs -l app=ingestion-worker --previous --tail=100"
+  ]
+}

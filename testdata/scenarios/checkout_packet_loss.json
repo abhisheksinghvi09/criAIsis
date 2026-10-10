@@ -1,0 +1,48 @@
+{
+  "id": "scenario-checkout-packet-loss",
+  "title": "AWS NAT Gateway Port Allocation Exhaustion During Flash Sale",
+  "description": "High outbound packet loss and 504 timeouts when payment service attempts to reach Stripe API. Latency spiked from 80ms to 15,000ms. Database CPU is under 15%.",
+  "severity": "sev-1",
+  "trigger_type": "webhook",
+  "context": {
+    "failing_service": "payment-worker",
+    "error_logs": [
+      "2026-09-17T00:15:30Z [payment-worker] dial tcp 54.187.159.182:443: i/o timeout",
+      "2026-09-17T00:15:33Z [payment-worker] dial tcp 52.39.22.84:443: connect: connection timed out",
+      "2026-09-17T00:15:40Z [payment-worker] Stripe API unreachable after 3 retries"
+    ],
+    "stack_traces": [
+      "net/http.(*Transport).dialConn\n\t/usr/local/go/src/net/http/transport.go:1602\nnet/http.(*Transport).dialConnFor\n\t/usr/local/go/src/net/http/transport.go:1444\ngithub.com/stripe/stripe-go/v74.(*Client).Do\n\t/go/pkg/mod/github.com/stripe/stripe-go/v74@v74.20.0/client.go:89"
+    ],
+    "metrics": {
+      "nat_gateway_error_port_allocation": 12840,
+      "nat_gateway_packets_drop_count": 48200,
+      "outbound_payment_latency_ms": 15200,
+      "http_504_rate_percent": 84.2
+    }
+  },
+  "runbooks": {
+    "network": {
+      "title": "AWS NAT Gateway SNAT Port Exhaustion Runbook",
+      "raw_content": "# AWS NAT Gateway SNAT Exhaustion Runbook\n\n## Root Cause Indicators\n- CloudWatch Metric: `ErrorPortAllocation` > 0\n- CloudWatch Metric: `PacketsDropCount` > 0\nEach NAT gateway supports a maximum of 55,000 concurrent connections per destination IP. When multiple container instances burst outbound traffic without connection pooling, source port allocation fails.\n\n## Diagnostic Commands\n```bash\naws cloudwatch get-metric-data --metric-data-queries '...' --start-time -1h\n```\n\n## Immediate Mitigation\n1. Allocate a secondary elastic IP to the NAT Gateway to double the available SNAT ports (from 55,000 to 110,000).\n2. Provision an additional NAT Gateway in AZ-b and balance route tables."
+    },
+    "application": {
+      "title": "Payment Worker HTTP Client Pooling",
+      "raw_content": "# Payment Service HTTP Client Configuration\n\n## Connection Pool Settings\nPayment worker uses `http.DefaultTransport` with `MaxIdleConnsPerHost = 100`. Verify that client connections are properly reusing TCP sockets and closing response bodies."
+    },
+    "database": {
+      "title": "Database Health During Outbound Outages",
+      "raw_content": "# Database Status Check\nDuring third-party payment gateway outages, confirm that database is not accumulating uncommitted locks waiting on network timeouts."
+    },
+    "security": {
+      "title": "Security Group and Egress Filter Verification",
+      "raw_content": "# Network Egress Security Verification\nEnsure that security group egress rules allow TCP port 443 outbound to 0.0.0.0/0 and no AWS Network Firewall drop rules were deployed."
+    }
+  },
+  "expected_classification": "infrastructure",
+  "expected_owner": "network",
+  "expected_diagnostic_queries": [
+    "aws cloudwatch get-metric-data --metric-name ErrorPortAllocation --namespace AWS/NATGateway",
+    "aws ec2 describe-nat-gateways --nat-gateway-ids nat-0abc123def456"
+  ]
+}
