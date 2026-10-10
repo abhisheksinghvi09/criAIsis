@@ -10,7 +10,6 @@ import (
 	"criaisis/internal/domain/repository"
 	"criaisis/internal/domain/value"
 	"criaisis/internal/infrastructure/llm"
-	"criaisis/internal/infrastructure/telemetry"
 	"criaisis/internal/service/orchestrator"
 
 	"github.com/google/uuid"
@@ -54,7 +53,7 @@ func newFixture(t *testing.T, chat llm.ChatProvider) *fixture {
 	}
 
 	return &fixture{
-		orch:     orchestrator.New(personas, chunks, turns, chat, llm.FakeEmbedder{}, telemetry.NewRegistry(), &logger),
+		orch:     orchestrator.New(personas, chunks, turns, chat, llm.FakeEmbedder{}, &logger),
 		incident: incident,
 		turns:    turns,
 		personas: personas,

@@ -157,7 +157,7 @@ func newMgmt(t *testing.T, teams ...string) *mgmt {
 	}
 
 	resolver := tenant.NewResolver(settings, cipher)
-	wh := handler.NewWorkspaceHandler(workspaces, stubPersonas{}, settings, resolver, nil, cipher, entity.SettingsDefaults{}, &logger)
+	wh := handler.NewWorkspaceHandler(workspaces, stubPersonas{}, settings, noopTxManager{}, resolver, nil, cipher, entity.SettingsDefaults{}, &logger)
 	auth := handler.NewAuth(workspaces, platformKey, &logger)
 
 	r := chi.NewRouter()

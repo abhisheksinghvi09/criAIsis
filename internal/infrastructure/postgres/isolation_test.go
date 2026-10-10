@@ -39,6 +39,48 @@ func getTestPool(t *testing.T) *pgxpool.Pool {
 	return db.Pool
 }
 
+// TestPostgresTxManager_RollsBackOnFailure proves workspace provisioning is
+// atomic: if any write in the sequence fails, none of them stick. Without
+// this, a failure partway through (e.g. seeding the default personas) would
+// leave a workspace row that exists but can never run an investigation.
+func TestPostgresTxManager_RollsBackOnFailure(t *testing.T) {
+	pool := getTestPool(t)
+	defer pool.Close()
+
+	ctx := context.Background()
+	wsRepo := postgres.NewWorkspaceRepository(pool)
+	txMgr := postgres.NewTxManager(pool)
+
+	ws, err := entity.NewWorkspace("T_ROLLBACK", "Rollback Test", []byte("01234567890123456789012345678901"))
+	if err != nil {
+		t.Fatalf("failed creating workspace entity: %v", err)
+	}
+	defer func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM workspaces WHERE id = $1", ws.ID().UUID())
+	}()
+
+	dup, err := entity.NewWorkspace("T_ROLLBACK", "Duplicate Team ID", []byte("01234567890123456789012345678901"))
+	if err != nil {
+		t.Fatalf("failed creating duplicate workspace entity: %v", err)
+	}
+
+	txErr := txMgr.WithinTransaction(ctx, func(txCtx context.Context) error {
+		if err := wsRepo.Create(txCtx, ws); err != nil {
+			return err
+		}
+		// Same slack_team_id: this must violate the unique constraint and force
+		// a rollback of the first Create in this same transaction.
+		return wsRepo.Create(txCtx, dup)
+	})
+	if txErr == nil {
+		t.Fatal("expected the transaction to fail on the duplicate team id")
+	}
+
+	if _, err := wsRepo.GetByID(ctx, ws.ID()); err == nil {
+		t.Error("CRITICAL: workspace from a rolled-back transaction is still readable")
+	}
+}
+
 func TestTenantIsolation_RepositoryQueries(t *testing.T) {
 	pool := getTestPool(t)
 	defer pool.Close()

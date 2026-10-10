@@ -18,7 +18,6 @@ import (
 	"criaisis/internal/infrastructure/crypto"
 	"criaisis/internal/infrastructure/postgres"
 	"criaisis/internal/infrastructure/slack"
-	"criaisis/internal/infrastructure/telemetry"
 	"criaisis/internal/router"
 	"criaisis/internal/server"
 	"criaisis/internal/service/incident"
@@ -96,7 +95,7 @@ func main() {
 	srv.SetupHTTPServer(router.New(srv, router.Handlers{
 		Alert: handler.NewAlertHandler(repos.workspaces, incidents, &logger),
 		Workspace: handler.NewWorkspaceHandler(
-			repos.workspaces, repos.personas, repos.settings, resolver, incidents, cipher,
+			repos.workspaces, repos.personas, repos.settings, repos.tx, resolver, incidents, cipher,
 			defaultsFrom(cfg), &logger,
 		),
 		Runbook:        handler.NewRunbookHandler(repos.documents, repos.chunks, repos.personas, resolver, &logger),
@@ -139,6 +138,7 @@ type repositories struct {
 	incidents  *postgres.PostgresIncidentRepository
 	turns      *postgres.PostgresDebateTurnRepository
 	sandbox    *postgres.PostgresSandboxReproductionRepository
+	tx         *postgres.PostgresTxManager
 }
 
 // newRepositories constructs every repository against the shared pool.
@@ -153,15 +153,15 @@ func newRepositories(srv *server.Server) repositories {
 		incidents:  postgres.NewIncidentRepository(pool),
 		turns:      postgres.NewDebateTurnRepository(pool),
 		sandbox:    postgres.NewSandboxReproductionRepository(pool),
+		tx:         postgres.NewTxManager(pool),
 	}
 }
 
 // buildOrchestrator binds the repositories once and leaves the model clients to be
 // supplied per tenant, because every debate runs on that customer's own key.
 func buildOrchestrator(repos repositories, log *zerolog.Logger) incident.BuildOrchestrator {
-	tools := telemetry.NewRegistry()
 	return func(rt *tenant.Runtime) *orchestrator.Orchestrator {
-		return orchestrator.New(repos.personas, repos.chunks, repos.turns, rt.Chat, rt.Embedder, tools, log)
+		return orchestrator.New(repos.personas, repos.chunks, repos.turns, rt.Chat, rt.Embedder, log)
 	}
 }
 

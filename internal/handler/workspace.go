@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,6 +28,7 @@ type WorkspaceHandler struct {
 	workspaces repository.WorkspaceRepository
 	personas   repository.PersonaRepository
 	settings   repository.SettingsRepository
+	tx         repository.TransactionManager
 	resolver   *tenant.Resolver
 	incidents  *incident.Service
 	cipher     *crypto.Cipher
@@ -39,6 +41,7 @@ func NewWorkspaceHandler(
 	workspaces repository.WorkspaceRepository,
 	personas repository.PersonaRepository,
 	settings repository.SettingsRepository,
+	tx repository.TransactionManager,
 	resolver *tenant.Resolver,
 	incidents *incident.Service,
 	cipher *crypto.Cipher,
@@ -46,7 +49,7 @@ func NewWorkspaceHandler(
 	log *zerolog.Logger,
 ) *WorkspaceHandler {
 	return &WorkspaceHandler{
-		workspaces: workspaces, personas: personas, settings: settings, resolver: resolver,
+		workspaces: workspaces, personas: personas, settings: settings, tx: tx, resolver: resolver,
 		incidents: incidents, cipher: cipher, defaults: defaults, log: log,
 	}
 }
@@ -98,31 +101,38 @@ func (h *WorkspaceHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.workspaces.Create(r.Context(), ws); err != nil {
-		h.fail(w, "creating workspace", err)
-		return
-	}
-
 	settings, err := entity.NewWorkspaceSettings(ws.ID(), h.defaults)
 	if err != nil {
 		h.fail(w, "preparing settings", err)
 		return
 	}
-	if err := h.settings.Create(r.Context(), settings); err != nil {
-		h.fail(w, "creating settings", err)
-		return
-	}
-
 	personas, err := entity.DefaultPersonas(ws.ID())
 	if err != nil {
 		h.fail(w, "building specialists", err)
 		return
 	}
-	for _, persona := range personas {
-		if err := h.personaCreate(r, persona); err != nil {
-			h.fail(w, "seeding specialists", err)
-			return
+
+	// A workspace is useless without its settings row and default personas: the
+	// clash engine can't resolve credentials or run Stage 1 without them. Commit
+	// all three writes atomically so a failure partway through never leaves a
+	// workspace stuck half-provisioned.
+	err = h.tx.WithinTransaction(r.Context(), func(ctx context.Context) error {
+		if err := h.workspaces.Create(ctx, ws); err != nil {
+			return fmt.Errorf("creating workspace: %w", err)
 		}
+		if err := h.settings.Create(ctx, settings); err != nil {
+			return fmt.Errorf("creating settings: %w", err)
+		}
+		for _, persona := range personas {
+			if err := h.personaCreate(ctx, persona); err != nil {
+				return fmt.Errorf("seeding specialists: %w", err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		h.fail(w, "provisioning workspace", err)
+		return
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -393,8 +403,8 @@ func (h *WorkspaceHandler) save(w http.ResponseWriter, r *http.Request, settings
 }
 
 // personaCreate seeds one specialist. Declared separately so Create stays readable.
-func (h *WorkspaceHandler) personaCreate(r *http.Request, persona *entity.Persona) error {
-	return h.personas.Create(r.Context(), persona)
+func (h *WorkspaceHandler) personaCreate(ctx context.Context, persona *entity.Persona) error {
+	return h.personas.Create(ctx, persona)
 }
 
 // fail logs the cause and returns a generic message, so an internal error never

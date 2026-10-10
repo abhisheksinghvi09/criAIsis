@@ -10,7 +10,6 @@ import (
 	"criaisis/internal/domain/repository"
 	"criaisis/internal/domain/value"
 	"criaisis/internal/infrastructure/llm"
-	"criaisis/internal/infrastructure/telemetry"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -28,23 +27,21 @@ type Orchestrator struct {
 	turns    repository.DebateTurnRepository
 	chat     llm.ChatProvider
 	embedder llm.EmbeddingProvider
-	tools    *telemetry.Registry
 	log      *zerolog.Logger
 }
 
-// New wires the clash engine to its persistence, model, and telemetry dependencies.
+// New wires the clash engine to its persistence and model dependencies.
 func New(
 	personas repository.PersonaRepository,
 	chunks repository.ChunkRepository,
 	turns repository.DebateTurnRepository,
 	chat llm.ChatProvider,
 	embedder llm.EmbeddingProvider,
-	tools *telemetry.Registry,
 	log *zerolog.Logger,
 ) *Orchestrator {
 	return &Orchestrator{
 		personas: personas, chunks: chunks, turns: turns,
-		chat: chat, embedder: embedder, tools: tools, log: log,
+		chat: chat, embedder: embedder, log: log,
 	}
 }
 

@@ -48,7 +48,6 @@ type turnMetadata struct {
 	Contradictions    []string                 `json:"contradictions,omitempty"`
 	NextSteps         []string                 `json:"next_steps,omitempty"`
 	DiagnosticQueries []string                 `json:"diagnostic_queries,omitempty"`
-	Probes            []string                 `json:"probes,omitempty"`
 }
 
 // JSON renders the metadata envelope, falling back to an empty object so a

@@ -11,6 +11,15 @@ import (
 	"github.com/google/uuid"
 )
 
+// noopTxManager runs the callback directly against the caller's context. The
+// mock repositories in this file aren't transaction-aware, so there is nothing
+// for a real transaction boundary to coordinate in these tests.
+type noopTxManager struct{}
+
+func (noopTxManager) WithinTransaction(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
 type mockIncidentRepo struct {
 	mu        sync.RWMutex
 	incidents map[uuid.UUID]*entity.Incident
