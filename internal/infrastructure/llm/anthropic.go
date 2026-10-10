@@ -46,7 +46,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req ChatRequest) (stri
 	}
 
 	params := anthropic.MessageNewParams{
-		Model:        anthropic.Model(p.modelFor(req.Role)),
+		Model:        p.modelFor(req.Role),
 		MaxTokens:    maxTokens,
 		OutputConfig: p.outputConfig(req),
 		System:       []anthropic.TextBlockParam{{Text: req.System}},

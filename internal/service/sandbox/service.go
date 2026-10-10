@@ -47,7 +47,13 @@ func NewExecProvisioner(scriptPath string) *ExecProvisioner {
 }
 
 func (p *ExecProvisioner) Provision(ctx context.Context, scenarioID string) (string, error) {
-	cmd := exec.CommandContext(ctx, p.scriptPath, scenarioID, "--keep")
+	// Enforced again here, not just by the caller: this is the actual OS-command
+	// boundary, and relying solely on an upstream check would silently break if
+	// a future caller skipped it.
+	if !isValidScenario(scenarioID) {
+		return "", fmt.Errorf("refusing to provision unknown scenario %q", scenarioID)
+	}
+	cmd := exec.CommandContext(ctx, p.scriptPath, scenarioID, "--keep") // #nosec G204 -- scenarioID is checked against the fixed ValidScenarios allowlist above
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("provisioning failed: %w (output: %s)", err, string(out))

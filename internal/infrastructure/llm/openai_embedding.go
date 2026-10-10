@@ -107,7 +107,7 @@ func (e *OpenAIEmbedder) post(ctx context.Context, body embeddingRequest) (*embe
 	if err != nil {
 		return nil, fmt.Errorf("embeddings: request failed: %w", err)
 	}
-	defer httpResp.Body.Close()
+	defer func() { _ = httpResp.Body.Close() }()
 
 	raw, err := io.ReadAll(io.LimitReader(httpResp.Body, 64<<20))
 	if err != nil {

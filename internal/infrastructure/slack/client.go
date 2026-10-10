@@ -70,7 +70,7 @@ func (c *DefaultClient) ExchangeOAuthCode(ctx context.Context, clientID, clientS
 	if err != nil {
 		return nil, fmt.Errorf("performing oauth request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -125,7 +125,7 @@ func (c *DefaultClient) postJSON(ctx context.Context, token, endpoint string, pa
 	if err != nil {
 		return fmt.Errorf("calling slack api %s: %w", endpoint, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("slack api returned status %d", resp.StatusCode)

@@ -36,7 +36,9 @@ func New(srv *server.Server, h Handlers) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+	// Deliberately no middleware.RealIP: it is a spoofable trust-on-faith rewrite
+	// of r.RemoteAddr from client-supplied headers (GHSA-3fxj-6jh8-hvhx), and
+	// nothing in this codebase reads RemoteAddr, so it bought nothing but the risk.
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(requestTimeout))
 	r.Use(corsMiddleware(srv.Config.Server.CORSAllowedOrigins))

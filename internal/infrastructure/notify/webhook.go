@@ -81,7 +81,7 @@ func post(ctx context.Context, client *http.Client, webhookURL string, payload a
 		// The URL is a credential, so it must not reach the logs via the error.
 		return fmt.Errorf("delivering notification: %w", redactURL(err, webhookURL))
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 300 {
 		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))

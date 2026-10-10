@@ -31,12 +31,15 @@ func New(cfg *config.Config, logger *zerolog.Logger) (*Database, error) {
 		return nil, fmt.Errorf("failed to parse pgx pool config: %w", err)
 	}
 
-	// Apply connection pool sizing and connection lifetime limits
+	// Apply connection pool sizing and connection lifetime limits. These are
+	// operator-set deployment config, not attacker input, and a pool sized
+	// anywhere near int32's range would exhaust Postgres's connection limit
+	// long before the conversion could overflow.
 	if cfg.Database.MaxOpenConns > 0 {
-		pgxPoolConfig.MaxConns = int32(cfg.Database.MaxOpenConns)
+		pgxPoolConfig.MaxConns = int32(cfg.Database.MaxOpenConns) // #nosec G115 -- operator-controlled, not attacker input
 	}
 	if cfg.Database.MaxIdleConns > 0 {
-		pgxPoolConfig.MinConns = int32(cfg.Database.MaxIdleConns)
+		pgxPoolConfig.MinConns = int32(cfg.Database.MaxIdleConns) // #nosec G115 -- operator-controlled, not attacker input
 	}
 	if cfg.Database.ConnMaxLifetime > 0 {
 		pgxPoolConfig.MaxConnLifetime = time.Duration(cfg.Database.ConnMaxLifetime) * time.Second

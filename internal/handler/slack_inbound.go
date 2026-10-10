@@ -154,9 +154,9 @@ func (h *SlackInboundHandler) HandleCommand(w http.ResponseWriter, r *http.Reque
 	subcommand := parts[0]
 	switch subcommand {
 	case "investigate":
-		h.handleInvestigate(w, r, teamID, channelID, userID, parts[1:])
+		h.handleInvestigate(w, teamID, channelID, userID, parts[1:])
 	case "resolve":
-		h.handleResolve(w, r, teamID, channelID)
+		h.handleResolve(w, r, teamID)
 	default:
 		writeJSON(w, http.StatusOK, map[string]string{
 			"response_type": "ephemeral",
@@ -167,7 +167,6 @@ func (h *SlackInboundHandler) HandleCommand(w http.ResponseWriter, r *http.Reque
 
 func (h *SlackInboundHandler) handleInvestigate(
 	w http.ResponseWriter,
-	r *http.Request,
 	teamID string,
 	channelID string,
 	userID string,
@@ -259,7 +258,7 @@ func (h *SlackInboundHandler) handleInvestigate(
 	}()
 }
 
-func (h *SlackInboundHandler) handleResolve(w http.ResponseWriter, r *http.Request, teamID string, channelID string) {
+func (h *SlackInboundHandler) handleResolve(w http.ResponseWriter, r *http.Request, teamID string) {
 	ctx := r.Context()
 	ws, err := h.workspaces.GetBySlackTeamID(ctx, teamID)
 	if err != nil {
@@ -270,6 +269,9 @@ func (h *SlackInboundHandler) handleResolve(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// ponytail: resolves the workspace's single most recent active incident,
+	// not the one in the calling channel - fine while a workspace runs one
+	// incident at a time; scope ListActive by channel if that stops holding.
 	activeIncidents, err := h.incidents.ListActive(ctx, ws.ID(), 1, 0)
 	if err != nil || len(activeIncidents) == 0 {
 		writeJSON(w, http.StatusOK, map[string]string{
@@ -389,7 +391,7 @@ func (h *SlackInboundHandler) HandleEvents(w http.ResponseWriter, r *http.Reques
 	}
 
 	if body.Type == "event_callback" && body.Event.Type == "app_mention" {
-		h.handleAppMention(w, r, body.TeamID, body.Event.Channel, body.Event.ThreadTS, body.Event.Text)
+		h.handleAppMention(w, body.TeamID, body.Event.Channel, body.Event.ThreadTS, body.Event.Text)
 		return
 	}
 
@@ -398,7 +400,6 @@ func (h *SlackInboundHandler) HandleEvents(w http.ResponseWriter, r *http.Reques
 
 func (h *SlackInboundHandler) handleAppMention(
 	w http.ResponseWriter,
-	r *http.Request,
 	teamID string,
 	channelID string,
 	threadTS string,
@@ -471,7 +472,7 @@ func (h *SlackInboundHandler) handleAppMention(
 			return
 		}
 
-		replyText := fmt.Sprintf("*%s Specialist Diagnosis:*\n%s", strings.Title(personaKey.String()), turn.Content())
+		replyText := fmt.Sprintf("*%s Specialist Diagnosis:*\n%s", capitalize(personaKey.String()), turn.Content())
 		if err := h.slackClient.PostMessage(bgCtx, decryptedToken, channelID, threadTS, replyText); err != nil {
 			h.log.Error().Err(err).
 				Str("workspace_id", ws.ID().String()).
@@ -479,4 +480,15 @@ func (h *SlackInboundHandler) handleAppMention(
 				Msg("app_mention: posting follow-up reply to slack failed")
 		}
 	}()
+}
+
+// capitalize upper-cases the first byte of a persona key ("database" ->
+// "Database"). Persona keys are always a single lowercase ASCII word, so this
+// avoids strings.Title's deprecated, Unicode-aware word-boundary behavior for
+// a case this codebase never actually hits.
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }

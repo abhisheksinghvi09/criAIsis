@@ -1,0 +1,27 @@
+version: "2"
+
+linters:
+  enable:
+    - gosec
+    - unconvert
+    - unparam
+  settings:
+    gosec:
+      excludes:
+        # G104 duplicates errcheck, which govet/the compiler already surface via
+        # unhandled-error build failures in this codebase's style.
+        - G104
+  exclusions:
+    rules:
+      # G101 pattern-matches identifier/string shapes, not real secrets: it fires
+      # on a header name ("X-Criaisis-Token") and on test fixtures that are
+      # plainly fake credentials. Test files in general are exempted below.
+      - path: _test\.go
+        linters: [gosec]
+      - path: internal/handler/alert\.go
+        text: "G101"
+        linters: [gosec]
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

@@ -43,8 +43,7 @@ func TestSandboxHandler(t *testing.T) {
 	))
 	_ = incRepo.Create(context.Background(), resolvedInc)
 
-	ws, _ := entity.NewWorkspace("T123", "Acme", []byte("enc-token"))
-	ws, _ = entity.ReconstituteWorkspace(wsID, "T123", "Acme", []byte("enc-token"), nil, nil, time.Now(), time.Now())
+	ws, _ := entity.ReconstituteWorkspace(wsID, "T123", "Acme", []byte("enc-token"), nil, nil, time.Now(), time.Now())
 
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {

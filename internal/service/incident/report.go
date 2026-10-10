@@ -1,7 +1,6 @@
 package incident
 
 import (
-	"fmt"
 	"time"
 
 	"criaisis/internal/domain/entity"
@@ -81,7 +80,7 @@ func collectCitations(result *orchestrator.ClashResult) []string {
 	}
 
 	if len(titles) == 0 {
-		return []string{fmt.Sprintf("none: no runbook matched this incident")}
+		return []string{"none: no runbook matched this incident"}
 	}
 	return titles
 }
