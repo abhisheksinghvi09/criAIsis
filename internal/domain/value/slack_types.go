@@ -50,3 +50,18 @@ func NewSlackUserID(raw string) (SlackUserID, error) {
 func (u SlackUserID) String() string {
 	return string(u)
 }
+
+// ParseSlackChannelID validates and parses a SlackChannelID.
+func ParseSlackChannelID(raw string) (SlackChannelID, error) {
+	return NewSlackChannelID(raw)
+}
+
+// ParseSlackThreadTS validates and parses a SlackThreadTS.
+func ParseSlackThreadTS(raw string) (SlackThreadTS, error) {
+	return NewSlackThreadTS(raw)
+}
+
+// ParseSlackUserID validates and parses a SlackUserID.
+func ParseSlackUserID(raw string) (SlackUserID, error) {
+	return NewSlackUserID(raw)
+}
