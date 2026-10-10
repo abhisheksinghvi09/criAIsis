@@ -31,21 +31,21 @@ func (m *mockReproRepo) Create(ctx context.Context, sr *entity.SandboxReproducti
 	return nil
 }
 
-func (m *mockReproRepo) GetByID(ctx context.Context, id uuid.UUID) (*entity.SandboxReproduction, error) {
+func (m *mockReproRepo) GetByID(ctx context.Context, wsID value.WorkspaceID, id uuid.UUID) (*entity.SandboxReproduction, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	sr, ok := m.repros[id]
-	if !ok {
+	if !ok || sr.WorkspaceID() != wsID {
 		return nil, errors.New("not found")
 	}
 	return sr, nil
 }
 
-func (m *mockReproRepo) GetActiveForIncident(ctx context.Context, incidentID uuid.UUID) (*entity.SandboxReproduction, error) {
+func (m *mockReproRepo) GetActiveForIncident(ctx context.Context, wsID value.WorkspaceID, incidentID uuid.UUID) (*entity.SandboxReproduction, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for _, sr := range m.repros {
-		if sr.IncidentID() == incidentID && (sr.Status() == value.SandboxStatusProvisioning || sr.Status() == value.SandboxStatusReady) {
+		if sr.WorkspaceID() == wsID && sr.IncidentID() == incidentID && (sr.Status() == value.SandboxStatusProvisioning || sr.Status() == value.SandboxStatusReady) {
 			return sr, nil
 		}
 	}
@@ -174,7 +174,7 @@ func TestSandboxService(t *testing.T) {
 	})
 
 	t.Run("BR5.6: access endpoint check", func(t *testing.T) {
-		sr, err := reproRepo.GetActiveForIncident(context.Background(), resolvedInc.ID())
+		sr, err := reproRepo.GetActiveForIncident(context.Background(), wsID, resolvedInc.ID())
 		if err != nil || sr == nil {
 			t.Fatal("expected active reproduction")
 		}
@@ -189,7 +189,7 @@ func TestSandboxService(t *testing.T) {
 		close(prov.block)
 		for i := 0; i < 30; i++ {
 			time.Sleep(10 * time.Millisecond)
-			if s, _ := reproRepo.GetByID(context.Background(), sr.ID()); s.Status() == value.SandboxStatusReady {
+			if s, _ := reproRepo.GetByID(context.Background(), wsID, sr.ID()); s.Status() == value.SandboxStatusReady {
 				break
 			}
 		}

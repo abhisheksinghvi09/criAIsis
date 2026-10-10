@@ -7,7 +7,9 @@ import (
 
 	"criaisis/internal/config"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	pgxvector "github.com/pgvector/pgvector-go/pgx"
 	"github.com/rs/zerolog"
 )
 
@@ -41,6 +43,14 @@ func New(cfg *config.Config, logger *zerolog.Logger) (*Database, error) {
 	}
 	if cfg.Database.ConnMaxIdleTime > 0 {
 		pgxPoolConfig.MaxConnIdleTime = time.Duration(cfg.Database.ConnMaxIdleTime) * time.Second
+	}
+
+	// Without this, pgx has no binary codec for the vector type: every vector
+	// column goes through COPY (chunk_repo.go's BatchCreate) or the extended
+	// query protocol with a garbage encoding instead of pgvector's wire format,
+	// which pgvector rejects or silently misreads.
+	pgxPoolConfig.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		return pgxvector.RegisterTypes(ctx, conn)
 	}
 
 	pool, err := pgxpool.NewWithConfig(context.Background(), pgxPoolConfig)

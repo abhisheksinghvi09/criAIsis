@@ -60,11 +60,11 @@ func (r *PostgresSandboxReproductionRepository) Create(ctx context.Context, sr *
 	return nil
 }
 
-func (r *PostgresSandboxReproductionRepository) GetByID(ctx context.Context, id uuid.UUID) (*entity.SandboxReproduction, error) {
+func (r *PostgresSandboxReproductionRepository) GetByID(ctx context.Context, wsID value.WorkspaceID, id uuid.UUID) (*entity.SandboxReproduction, error) {
 	const query = `
 		SELECT id, incident_id, workspace_id, status, scenario_id, container_ref, created_at, ready_at, updated_at
 		FROM sandbox_reproductions
-		WHERE id = $1;
+		WHERE workspace_id = $1 AND id = $2;
 	`
 	exec := GetExecutor(ctx, r.pool)
 	var (
@@ -79,7 +79,7 @@ func (r *PostgresSandboxReproductionRepository) GetByID(ctx context.Context, id 
 		updatedAt     time.Time
 	)
 
-	err := exec.QueryRow(ctx, query, id).Scan(
+	err := exec.QueryRow(ctx, query, wsID.UUID(), id).Scan(
 		&rawID,
 		&incidentID,
 		&workspaceUUID,
@@ -97,7 +97,7 @@ func (r *PostgresSandboxReproductionRepository) GetByID(ctx context.Context, id 
 		return nil, fmt.Errorf("querying sandbox reproduction by id: %w", err)
 	}
 
-	wsID, err := value.FromUUID(workspaceUUID)
+	reconstructedWsID, err := value.FromUUID(workspaceUUID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid workspace id in db: %w", err)
 	}
@@ -110,7 +110,7 @@ func (r *PostgresSandboxReproductionRepository) GetByID(ctx context.Context, id 
 	return entity.ReconstituteSandboxReproduction(
 		rawID,
 		incidentID,
-		wsID,
+		reconstructedWsID,
 		status,
 		scenarioID.String,
 		containerRef.String,
@@ -120,11 +120,11 @@ func (r *PostgresSandboxReproductionRepository) GetByID(ctx context.Context, id 
 	), nil
 }
 
-func (r *PostgresSandboxReproductionRepository) GetActiveForIncident(ctx context.Context, incidentID uuid.UUID) (*entity.SandboxReproduction, error) {
+func (r *PostgresSandboxReproductionRepository) GetActiveForIncident(ctx context.Context, wsID value.WorkspaceID, incidentID uuid.UUID) (*entity.SandboxReproduction, error) {
 	const query = `
 		SELECT id, incident_id, workspace_id, status, scenario_id, container_ref, created_at, ready_at, updated_at
 		FROM sandbox_reproductions
-		WHERE incident_id = $1 AND status IN ('Provisioning', 'Ready')
+		WHERE workspace_id = $1 AND incident_id = $2 AND status IN ('Provisioning', 'Ready')
 		ORDER BY created_at DESC
 		LIMIT 1;
 	`
@@ -141,7 +141,7 @@ func (r *PostgresSandboxReproductionRepository) GetActiveForIncident(ctx context
 		updatedAt     time.Time
 	)
 
-	err := exec.QueryRow(ctx, query, incidentID).Scan(
+	err := exec.QueryRow(ctx, query, wsID.UUID(), incidentID).Scan(
 		&rawID,
 		&incID,
 		&workspaceUUID,
@@ -159,7 +159,7 @@ func (r *PostgresSandboxReproductionRepository) GetActiveForIncident(ctx context
 		return nil, fmt.Errorf("querying active sandbox reproduction: %w", err)
 	}
 
-	wsID, err := value.FromUUID(workspaceUUID)
+	reconstructedWsID, err := value.FromUUID(workspaceUUID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid workspace id in db: %w", err)
 	}
@@ -172,7 +172,7 @@ func (r *PostgresSandboxReproductionRepository) GetActiveForIncident(ctx context
 	return entity.ReconstituteSandboxReproduction(
 		rawID,
 		incID,
-		wsID,
+		reconstructedWsID,
 		status,
 		scenarioID.String,
 		containerRef.String,
@@ -185,12 +185,12 @@ func (r *PostgresSandboxReproductionRepository) GetActiveForIncident(ctx context
 func (r *PostgresSandboxReproductionRepository) Update(ctx context.Context, sr *entity.SandboxReproduction) error {
 	const query = `
 		UPDATE sandbox_reproductions
-		SET status = $2,
-		    scenario_id = $3,
-		    container_ref = $4,
-		    ready_at = $5,
-		    updated_at = $6
-		WHERE id = $1;
+		SET status = $3,
+		    scenario_id = $4,
+		    container_ref = $5,
+		    ready_at = $6,
+		    updated_at = $7
+		WHERE workspace_id = $1 AND id = $2;
 	`
 	exec := GetExecutor(ctx, r.pool)
 	var scenarioID *string
@@ -205,6 +205,7 @@ func (r *PostgresSandboxReproductionRepository) Update(ctx context.Context, sr *
 	}
 
 	tag, err := exec.Exec(ctx, query,
+		sr.WorkspaceID().UUID(),
 		sr.ID(),
 		sr.Status().String(),
 		scenarioID,

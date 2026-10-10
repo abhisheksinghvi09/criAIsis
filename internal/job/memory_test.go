@@ -124,3 +124,29 @@ func TestMemoryQueue_RejectsAfterShutdown(t *testing.T) {
 		t.Errorf("expected ErrQueueClosed after shutdown, got %v", err)
 	}
 }
+
+// Enqueue checked q.closed, then sent on q.jobs in a separate step; a Shutdown
+// landing between those two could close the channel underneath an in-flight
+// send and panic with "send on closed channel". Run under -race with many
+// concurrent enqueuers racing a shutdown to catch a regression of that gap.
+func TestMemoryQueue_ConcurrentEnqueueDuringShutdownNeverPanics(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		q := newQueue(1, 1)
+		q.Start(context.Background(), func(context.Context, job.IncidentJob) error { return nil })
+
+		var wg sync.WaitGroup
+		for w := 0; w < 20; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() { _ = recover() }() // a pre-fix panic would otherwise fail the whole test binary
+				_ = q.Enqueue(testJob())
+			}()
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		_ = q.Shutdown(ctx)
+		cancel()
+		wg.Wait()
+	}
+}

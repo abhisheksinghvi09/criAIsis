@@ -19,6 +19,11 @@ type MemoryQueue struct {
 	wg        sync.WaitGroup
 	closeOnce sync.Once
 	closed    chan struct{}
+
+	// closeMu excludes Enqueue from the moment Shutdown decides to close q.jobs.
+	// Without it, a send past the (non-blocking) closed check can race the close
+	// itself and panic with "send on closed channel".
+	closeMu sync.RWMutex
 }
 
 var _ Queue = (*MemoryQueue)(nil)
@@ -42,6 +47,9 @@ func NewMemoryQueue(buffer, workers int, log *zerolog.Logger) *MemoryQueue {
 // Enqueue submits a job without blocking. A full buffer is reported to the caller
 // so the HTTP edge can shed load instead of holding a connection open.
 func (q *MemoryQueue) Enqueue(job IncidentJob) error {
+	q.closeMu.RLock()
+	defer q.closeMu.RUnlock()
+
 	select {
 	case <-q.closed:
 		return ErrQueueClosed
@@ -98,8 +106,10 @@ func (q *MemoryQueue) run(ctx context.Context, handler Handler, job IncidentJob)
 // Shutdown stops intake and waits for in-flight work, bounded by ctx.
 func (q *MemoryQueue) Shutdown(ctx context.Context) error {
 	q.closeOnce.Do(func() {
+		q.closeMu.Lock()
 		close(q.closed)
 		close(q.jobs)
+		q.closeMu.Unlock()
 	})
 
 	done := make(chan struct{})

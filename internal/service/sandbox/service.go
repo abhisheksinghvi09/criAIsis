@@ -99,7 +99,7 @@ func (s *Service) Trigger(ctx context.Context, wsID value.WorkspaceID, incidentI
 	}
 
 	// BR5.1: Concurrency check - only one active reproduction
-	active, err := s.reproductions.GetActiveForIncident(ctx, incidentID)
+	active, err := s.reproductions.GetActiveForIncident(ctx, wsID, incidentID)
 	if err != nil {
 		return nil, fmt.Errorf("checking active reproduction: %w", err)
 	}
@@ -127,7 +127,7 @@ func (s *Service) Trigger(ctx context.Context, wsID value.WorkspaceID, incidentI
 	}
 
 	if sr.Status() == value.SandboxStatusProvisioning {
-		s.startProvisioning(sr.ID(), scenarioID)
+		s.startProvisioning(wsID, sr.ID(), scenarioID)
 	}
 
 	return sr, nil
@@ -139,12 +139,9 @@ func (s *Service) SelectScenario(ctx context.Context, wsID value.WorkspaceID, re
 		return nil, ErrInvalidScenario
 	}
 
-	sr, err := s.reproductions.GetByID(ctx, reprID)
+	sr, err := s.reproductions.GetByID(ctx, wsID, reprID)
 	if err != nil {
 		return nil, fmt.Errorf("loading reproduction: %w", err)
-	}
-	if sr.WorkspaceID() != wsID {
-		return nil, errors.New("workspace mismatch")
 	}
 
 	if err := sr.SelectScenario(scenarioID); err != nil {
@@ -155,20 +152,13 @@ func (s *Service) SelectScenario(ctx context.Context, wsID value.WorkspaceID, re
 		return nil, fmt.Errorf("updating reproduction: %w", err)
 	}
 
-	s.startProvisioning(sr.ID(), scenarioID)
+	s.startProvisioning(wsID, sr.ID(), scenarioID)
 	return sr, nil
 }
 
 // Get retrieves current reproduction status.
 func (s *Service) Get(ctx context.Context, wsID value.WorkspaceID, reprID uuid.UUID) (*entity.SandboxReproduction, error) {
-	sr, err := s.reproductions.GetByID(ctx, reprID)
-	if err != nil {
-		return nil, err
-	}
-	if sr.WorkspaceID() != wsID {
-		return nil, errors.New("workspace mismatch")
-	}
-	return sr, nil
+	return s.reproductions.GetByID(ctx, wsID, reprID)
 }
 
 // GetAccess returns connection and log URLs for a ready sandbox (BR5.6).
@@ -190,7 +180,7 @@ func (s *Service) GetAccess(ctx context.Context, wsID value.WorkspaceID, reprID 
 	}, nil
 }
 
-func (s *Service) startProvisioning(reprID uuid.UUID, scenarioID string) {
+func (s *Service) startProvisioning(wsID value.WorkspaceID, reprID uuid.UUID, scenarioID string) {
 	go func() {
 		defer func() {
 			if rec := recover(); rec != nil {
@@ -205,7 +195,7 @@ func (s *Service) startProvisioning(reprID uuid.UUID, scenarioID string) {
 		defer cancel()
 
 		ref, err := s.provisioner.Provision(bgCtx, scenarioID)
-		sr, loadErr := s.reproductions.GetByID(bgCtx, reprID)
+		sr, loadErr := s.reproductions.GetByID(bgCtx, wsID, reprID)
 		if loadErr != nil || sr == nil {
 			s.log.Error().Err(loadErr).Str("reproduction_id", reprID.String()).Msg("failed loading reproduction after provisioning")
 			return
@@ -225,7 +215,12 @@ func (s *Service) startProvisioning(reprID uuid.UUID, scenarioID string) {
 			sr.MarkReady(ref)
 		}
 
-		_ = s.reproductions.Update(bgCtx, sr)
+		if updateErr := s.reproductions.Update(bgCtx, sr); updateErr != nil {
+			s.log.Error().Err(updateErr).
+				Str("reproduction_id", reprID.String()).
+				Str("status", sr.Status().String()).
+				Msg("failed persisting sandbox provisioning result")
+		}
 	}()
 }
 

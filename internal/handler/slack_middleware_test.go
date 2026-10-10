@@ -76,6 +76,32 @@ func TestSlackSignatureMiddleware(t *testing.T) {
 		}
 	})
 
+	t.Run("oversized body is rejected before signature work", func(t *testing.T) {
+		// A real Slack payload is a few kilobytes; anything larger must be
+		// rejected by MaxBytesReader rather than fully buffered into memory at
+		// this unauthenticated edge.
+		oversized := strings.Repeat("a", (1<<20)+1)
+		ts := fmt.Sprintf("%d", time.Now().UTC().Unix())
+
+		req := httptest.NewRequest("POST", "/slack/command", strings.NewReader(oversized))
+		req.Header.Set("X-Slack-Request-Timestamp", ts)
+		req.Header.Set("X-Slack-Signature", "v0=irrelevant-the-body-must-be-rejected-first")
+		rec := httptest.NewRecorder()
+
+		called := false
+		mw.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			called = true
+			w.WriteHeader(http.StatusOK)
+		})).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", rec.Code)
+		}
+		if called {
+			t.Error("downstream handler must not run for an oversized body")
+		}
+	})
+
 	t.Run("invalid signature returns 400", func(t *testing.T) {
 		ts := fmt.Sprintf("%d", time.Now().UTC().Unix())
 		req := httptest.NewRequest("POST", "/slack/command", strings.NewReader("test"))

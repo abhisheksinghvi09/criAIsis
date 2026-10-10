@@ -219,9 +219,24 @@ func (h *SlackInboundHandler) handleInvestigate(
 			return
 		}
 
-		chanID, _ := value.ParseSlackChannelID(channelID)
-		uID, _ := value.ParseSlackUserID(userID)
-		threadTS, _ := value.ParseSlackThreadTS(fmt.Sprintf("%d.000000", time.Now().UTC().UnixNano()/1000))
+		chanID, err := value.ParseSlackChannelID(channelID)
+		if err != nil {
+			h.log.Error().Err(err).Str("team_id", teamID).Str("channel_id", channelID).
+				Msg("job dispatch failed: invalid slack channel id (BR7.4)")
+			return
+		}
+		uID, err := value.ParseSlackUserID(userID)
+		if err != nil {
+			h.log.Error().Err(err).Str("team_id", teamID).Str("user_id", userID).
+				Msg("job dispatch failed: invalid slack user id (BR7.4)")
+			return
+		}
+		threadTS, err := value.ParseSlackThreadTS(fmt.Sprintf("%d.000000", time.Now().UTC().UnixNano()/1000))
+		if err != nil {
+			h.log.Error().Err(err).Str("team_id", teamID).
+				Msg("job dispatch failed: invalid generated thread timestamp (BR7.4)")
+			return
+		}
 
 		input := incident.NewIncidentInput{
 			WorkspaceID: ws.ID(),
@@ -318,14 +333,24 @@ func (h *SlackInboundHandler) HandleInteractivity(w http.ResponseWriter, r *http
 	for _, action := range payload.Actions {
 		switch action.ActionID {
 		case "resolve":
-			if action.Value != "" {
-				incUUID, err := uuid.Parse(action.Value)
-				if err == nil {
-					ws, err := h.workspaces.GetBySlackTeamID(r.Context(), payload.Team.ID)
-					if err == nil && ws != nil {
-						_, _ = h.incidentSvc.Resolve(r.Context(), ws.ID(), incUUID)
-					}
-				}
+			if action.Value == "" {
+				continue
+			}
+			incUUID, err := uuid.Parse(action.Value)
+			if err != nil {
+				h.log.Error().Err(err).Str("value", action.Value).Msg("resolve action: invalid incident id (BR7.4)")
+				continue
+			}
+			ws, err := h.workspaces.GetBySlackTeamID(r.Context(), payload.Team.ID)
+			if err != nil || ws == nil {
+				h.log.Error().Err(err).Str("team_id", payload.Team.ID).Msg("resolve action: workspace lookup failed (BR7.4)")
+				continue
+			}
+			if _, err := h.incidentSvc.Resolve(r.Context(), ws.ID(), incUUID); err != nil {
+				h.log.Error().Err(err).
+					Str("workspace_id", ws.ID().String()).
+					Str("incident_id", incUUID.String()).
+					Msg("resolve action: resolving incident failed (BR7.4)")
 			}
 		case "mention_specialist":
 			// Client-side action: Instruct Slack user
@@ -398,8 +423,16 @@ func (h *SlackInboundHandler) handleAppMention(
 			return
 		}
 
-		chanID, _ := value.ParseSlackChannelID(channelID)
-		tTS, _ := value.ParseSlackThreadTS(threadTS)
+		chanID, err := value.ParseSlackChannelID(channelID)
+		if err != nil {
+			h.log.Error().Err(err).Str("channel_id", channelID).Msg("app_mention: invalid slack channel id")
+			return
+		}
+		tTS, err := value.ParseSlackThreadTS(threadTS)
+		if err != nil {
+			h.log.Error().Err(err).Str("thread_ts", threadTS).Msg("app_mention: invalid slack thread timestamp")
+			return
+		}
 
 		inc, err := h.incidents.GetBySlackThread(bgCtx, ws.ID(), chanID, tTS)
 		if err != nil || inc == nil {
@@ -439,6 +472,11 @@ func (h *SlackInboundHandler) handleAppMention(
 		}
 
 		replyText := fmt.Sprintf("*%s Specialist Diagnosis:*\n%s", strings.Title(personaKey.String()), turn.Content())
-		_ = h.slackClient.PostMessage(bgCtx, decryptedToken, channelID, threadTS, replyText)
+		if err := h.slackClient.PostMessage(bgCtx, decryptedToken, channelID, threadTS, replyText); err != nil {
+			h.log.Error().Err(err).
+				Str("workspace_id", ws.ID().String()).
+				Str("channel_id", channelID).
+				Msg("app_mention: posting follow-up reply to slack failed")
+		}
 	}()
 }

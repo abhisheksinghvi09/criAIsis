@@ -103,7 +103,7 @@ func TestSandboxHandler(t *testing.T) {
 		for i := 0; i < 30; i++ {
 			time.Sleep(10 * time.Millisecond)
 			rUUID, _ := uuid.Parse(reproID)
-			if s, _ := reproRepo.GetByID(context.Background(), rUUID); s.Status() == value.SandboxStatusReady {
+			if s, _ := reproRepo.GetByID(context.Background(), wsID, rUUID); s.Status() == value.SandboxStatusReady {
 				break
 			}
 		}

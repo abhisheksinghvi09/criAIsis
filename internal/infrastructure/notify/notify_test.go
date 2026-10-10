@@ -57,6 +57,10 @@ func TestSlack_RejectsNonHTTPSAndForeignHosts(t *testing.T) {
 		"https://evil.example.com/services/T/B/x",
 		"",
 		"://nonsense",
+		// A suffix-only host check would wrongly accept these: both end in
+		// "slack.com" but neither is a slack.com (sub)domain.
+		"https://evilslack.com/services/T/B/x",
+		"https://notslack.com/services/T/B/x",
 	}
 	for _, url := range cases {
 		if _, err := notify.NewSlack(url); err == nil {
@@ -70,6 +74,8 @@ func TestDiscord_RejectsNonHTTPSAndForeignHosts(t *testing.T) {
 		"http://discord.com/api/webhooks/1/x",
 		"https://evil.example.com/api/webhooks/1/x",
 		"",
+		"https://evildiscord.com/api/webhooks/1/x",
+		"https://notdiscord.com/api/webhooks/1/x",
 	}
 	for _, url := range cases {
 		if _, err := notify.NewDiscord(url); err == nil {
@@ -79,8 +85,32 @@ func TestDiscord_RejectsNonHTTPSAndForeignHosts(t *testing.T) {
 }
 
 func TestSlack_AcceptsValidWebhookURL(t *testing.T) {
-	if _, err := notify.NewSlack("https://hooks.slack.com/services/T000/B000/abc123"); err != nil {
-		t.Errorf("a valid slack webhook was rejected: %v", err)
+	for _, url := range []string{
+		"https://slack.com/services/T000/B000/abc123",
+		"https://hooks.slack.com/services/T000/B000/abc123",
+	} {
+		if _, err := notify.NewSlack(url); err != nil {
+			t.Errorf("a valid slack webhook was rejected: %v (%s)", err, url)
+		}
+	}
+}
+
+// A webhook that redirects must not be followed: the new host was never
+// validated, and following it is exactly how an allowed host becomes SSRF.
+func TestNotify_DoesNotFollowRedirects(t *testing.T) {
+	internal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("redirect target must never be reached")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(internal.Close)
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, internal.URL, http.StatusFound)
+	}))
+	t.Cleanup(redirector.Close)
+
+	if err := notify.SlackForTest(redirector.URL).Notify(context.Background(), sampleReport()); err == nil {
+		t.Error("expected a redirect response to be reported as a delivery failure")
 	}
 }
 

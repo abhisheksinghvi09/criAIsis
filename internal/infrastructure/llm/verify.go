@@ -3,6 +3,8 @@ package llm
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/url"
 	"time"
 
 	"criaisis/internal/domain/value"
@@ -38,6 +40,10 @@ func VerifyEmbeddings(ctx context.Context, opts EmbeddingOptions) error {
 	ctx, cancel := context.WithTimeout(ctx, verifyTimeout)
 	defer cancel()
 
+	if err := validateEmbeddingBaseURL(ctx, opts.BaseURL); err != nil {
+		return err
+	}
+
 	vectors, err := NewOpenAIEmbedder(opts).Embed(ctx, []string{"criaisis credential check"})
 	if err != nil {
 		return fmt.Errorf("embedding model %q did not respond: %w", opts.Model, err)
@@ -48,6 +54,44 @@ func VerifyEmbeddings(ctx context.Context, opts EmbeddingOptions) error {
 	if len(vectors[0]) != value.ExpectedEmbeddingDimensions {
 		return fmt.Errorf("embedding model %q returns %d dimensions, but the schema requires %d",
 			opts.Model, len(vectors[0]), value.ExpectedEmbeddingDimensions)
+	}
+	return nil
+}
+
+// validateEmbeddingBaseURL guards the one tenant-controlled endpoint this platform
+// calls out to. criAIsis is bring-your-own-embeddings, so the host can't be
+// allowlisted the way the fixed Slack/Discord webhook hosts are — instead it must
+// not resolve to a loopback, link-local (this includes the 169.254.169.254 cloud
+// metadata address), or private address, or a tenant could use their own setup
+// form to make the platform probe its own internal network and read the result
+// back from the verification error.
+//
+// ponytail: resolves once, at the point this URL is saved, not per later call —
+// a DNS answer that changes after that (rebinding) is not re-checked. Upgrade to
+// a custom Dialer that pins the validated IP if that gap ever matters for this
+// threat model.
+func validateEmbeddingBaseURL(ctx context.Context, raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("embedding base_url is not a valid url: %w", err)
+	}
+	if parsed.Scheme != "https" {
+		return fmt.Errorf("embedding base_url must use https, got %q", parsed.Scheme)
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return fmt.Errorf("embedding base_url has no host")
+	}
+
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return fmt.Errorf("embedding base_url host %q did not resolve: %w", host, err)
+	}
+	for _, addr := range addrs {
+		ip := addr.IP
+		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsPrivate() || ip.IsUnspecified() {
+			return fmt.Errorf("embedding base_url host %q resolves to a non-routable address", host)
+		}
 	}
 	return nil
 }

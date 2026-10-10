@@ -43,10 +43,21 @@ func validateWebhookURL(raw, wantHost string) error {
 	if parsed.Scheme != "https" {
 		return fmt.Errorf("webhook url must use https, got %q", parsed.Scheme)
 	}
-	if wantHost != "" && !strings.HasSuffix(parsed.Host, wantHost) {
-		return fmt.Errorf("webhook url host %q is not %s", parsed.Host, wantHost)
+	// Exact host or a true subdomain only: HasSuffix alone would also match
+	// "evilslack.com", which ends in "slack.com" but is not Slack.
+	host := parsed.Hostname()
+	if wantHost != "" && host != wantHost && !strings.HasSuffix(host, "."+wantHost) {
+		return fmt.Errorf("webhook url host %q is not %s", host, wantHost)
 	}
 	return nil
+}
+
+// noRedirectClient refuses to follow redirects, so a webhook whose host passes
+// validation cannot 302 the request to an internal address afterward.
+func noRedirectClient() *http.Client {
+	return &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
 }
 
 // post delivers a JSON payload and interprets the response.

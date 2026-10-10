@@ -66,16 +66,18 @@ func TestSecurityRegression_US7_1(t *testing.T) {
 			t.Fatalf("trigger failed: %v", err)
 		}
 
-		// Tenant B attempts to read Tenant A's reproduction
+		// Tenant B attempts to read Tenant A's reproduction. The repository now
+		// enforces this in the query itself (WHERE workspace_id = $1 AND id = $2),
+		// so the row is simply not found rather than found-then-rejected.
 		_, err = sandboxSvc.Get(context.Background(), wsB.ID(), srA.ID())
-		if err == nil || !strings.Contains(err.Error(), "workspace mismatch") {
-			t.Errorf("expected workspace mismatch error, got %v", err)
+		if err == nil {
+			t.Error("expected Tenant B to be denied Tenant A's reproduction, got no error")
 		}
 
 		// Tenant B attempts to select scenario on Tenant A's reproduction
 		_, err = sandboxSvc.SelectScenario(context.Background(), wsB.ID(), srA.ID(), "oom_crashloop")
-		if err == nil || !strings.Contains(err.Error(), "workspace mismatch") {
-			t.Errorf("expected workspace mismatch error, got %v", err)
+		if err == nil {
+			t.Error("expected Tenant B to be denied Tenant A's reproduction, got no error")
 		}
 	})
 

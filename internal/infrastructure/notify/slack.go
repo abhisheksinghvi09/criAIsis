@@ -24,7 +24,7 @@ func NewSlack(webhookURL string) (*Slack, error) {
 	if err := validateWebhookURL(webhookURL, "slack.com"); err != nil {
 		return nil, err
 	}
-	return &Slack{client: &http.Client{}, webhookURL: webhookURL}, nil
+	return &Slack{client: noRedirectClient(), webhookURL: webhookURL}, nil
 }
 
 // Notify posts the report as a Block Kit attachment with a severity stripe.

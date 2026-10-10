@@ -177,7 +177,12 @@ func (h *AlertHandler) confirmSNS(ctx context.Context, confirmation *SNSConfirma
 		return fmt.Errorf("building confirmation request: %w", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	// A redirect target is never re-validated against amazonaws.com, so one must
+	// not be followed: that is exactly how a validated host becomes an SSRF primitive.
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("fetching SubscribeURL: %w", err)
 	}

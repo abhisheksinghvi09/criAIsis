@@ -16,6 +16,12 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// maxSlackBody caps an inbound Slack request. Slash commands, interactivity
+// payloads and events are at most a few kilobytes; anything far larger is not
+// a real Slack request and must not be fully buffered into memory at this
+// unauthenticated edge before the signature is even checked.
+const maxSlackBody = 1 << 20
+
 // SlackSignatureMiddleware verifies inbound requests from Slack using HMAC-SHA256 signature
 // and provides replay protection by enforcing a 5-minute timestamp window.
 type SlackSignatureMiddleware struct {
@@ -58,9 +64,9 @@ func (m *SlackSignatureMiddleware) Handler(next http.Handler) http.Handler {
 			return
 		}
 
-		bodyBytes, err := io.ReadAll(r.Body)
+		bodyBytes, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxSlackBody))
 		if err != nil {
-			m.log.Error().Err(err).Msg("failed reading slack request body")
+			m.log.Warn().Err(err).Msg("slack request body exceeds the size limit or failed to read")
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cannot read request body"})
 			return
 		}

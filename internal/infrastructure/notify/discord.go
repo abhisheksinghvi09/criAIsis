@@ -32,7 +32,7 @@ func NewDiscord(webhookURL string) (*Discord, error) {
 			return nil, err
 		}
 	}
-	return &Discord{client: &http.Client{}, webhookURL: webhookURL}, nil
+	return &Discord{client: noRedirectClient(), webhookURL: webhookURL}, nil
 }
 
 // Notify posts the report as a single embed with a severity-coloured stripe.
