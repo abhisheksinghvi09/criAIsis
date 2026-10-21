@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +30,13 @@ const maxAlertBody = 1 << 20
 // webhookTokenHeader carries the per-workspace ingestion credential.
 const webhookTokenHeader = "X-Criaisis-Token"
 
+// alertsPerMinute caps accepted alerts per workspace.
+const alertsPerMinute = 60
+
+// dedupeWindow is how long an identical alert body is treated as a provider retry
+// of the same event rather than a new occurrence.
+const dedupeWindow = 10 * time.Minute
+
 // snsConfirmTimeout bounds the outbound subscription handshake.
 const snsConfirmTimeout = 10 * time.Second
 
@@ -35,12 +44,18 @@ const snsConfirmTimeout = 10 * time.Second
 type AlertHandler struct {
 	workspaces repository.WorkspaceRepository
 	incidents  *incident.Service
+	limiter    *WorkspaceRateLimitMiddleware
 	log        *zerolog.Logger
 }
 
 // NewAlertHandler wires the webhook ingress.
 func NewAlertHandler(workspaces repository.WorkspaceRepository, incidents *incident.Service, log *zerolog.Logger) *AlertHandler {
-	return &AlertHandler{workspaces: workspaces, incidents: incidents, log: log}
+	return &AlertHandler{
+		workspaces: workspaces, incidents: incidents, log: log,
+		// Each accepted alert costs several model calls on the tenant's own key, so a
+		// runaway monitor must be throttled rather than allowed to burn it.
+		limiter: NewWorkspaceRateLimitMiddleware(alertsPerMinute, time.Minute, log),
+	}
 }
 
 // Receive handles POST /api/v1/integrations/alerts/{provider}.
@@ -60,8 +75,19 @@ func (h *AlertHandler) Receive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxAlertBody))
+	if ok, retryAfter := h.limiter.allow(ws.ID().String()); !ok {
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
+		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "alert rate limit exceeded for this workspace"})
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxAlertBody))
 	if err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "alert payload too large"})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "could not read request body"})
 		return
 	}
@@ -91,11 +117,22 @@ func (h *AlertHandler) Receive(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid channel id"})
 		return
 	}
-	// Webhook incidents have no Slack thread yet; the posting step creates one, and
-	// this synthetic timestamp keeps the (workspace, channel, thread) key unique.
-	threadTS, err := value.NewSlackThreadTS(fmt.Sprintf("%d.000000", time.Now().UTC().UnixNano()))
+	// Webhook incidents have no Slack thread yet. The key doubles as an idempotency
+	// key: the same provider payload inside one window maps to the same
+	// (workspace, channel, thread), so a provider retry cannot open a second incident.
+	sum := sha256.Sum256(append([]byte(provider+"\x00"), body...))
+	bucket := time.Now().UTC().Unix() / int64(dedupeWindow.Seconds())
+	threadTS, err := value.NewSlackThreadTS(fmt.Sprintf("wh-%s-%d", hex.EncodeToString(sum[:8]), bucket))
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not allocate thread id"})
+		return
+	}
+	if existing, ok := h.incidents.FindByThread(r.Context(), ws.ID(), channelID, threadTS); ok {
+		writeJSON(w, http.StatusOK, map[string]string{
+			"incident_id": existing.ID().String(),
+			"severity":    existing.Severity().String(),
+			"status":      "duplicate: already " + existing.Status().String(),
+		})
 		return
 	}
 	createdBy, err := value.NewSlackUserID("U_WEBHOOK")

@@ -185,6 +185,14 @@ func (s *Service) deliver(ctx context.Context, runtime *tenant.Runtime, inc *ent
 	return nil
 }
 
+// FindByThread returns the incident already stored under a Slack channel and
+// thread key. Any lookup failure reads as "not found": the callers use this only
+// to avoid creating a duplicate, and the unique index is the real guard.
+func (s *Service) FindByThread(ctx context.Context, wsID value.WorkspaceID, ch value.SlackChannelID, ts value.SlackThreadTS) (*entity.Incident, bool) {
+	inc, err := s.incidents.GetBySlackThread(ctx, wsID, ch, ts)
+	return inc, err == nil && inc != nil
+}
+
 // Resolve closes an incident and locks its transcript.
 func (s *Service) Resolve(ctx context.Context, wsID value.WorkspaceID, id uuid.UUID) (*entity.Incident, error) {
 	inc, err := s.incidents.GetByID(ctx, wsID, id)

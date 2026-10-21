@@ -6,8 +6,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"criaisis/internal/domain/entity"
 	"criaisis/internal/domain/repository"
@@ -50,8 +52,13 @@ func (m *memIncidents) Create(_ context.Context, inc *entity.Incident) error {
 func (m *memIncidents) GetByID(context.Context, value.WorkspaceID, uuid.UUID) (*entity.Incident, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *memIncidents) GetBySlackThread(context.Context, value.WorkspaceID, value.SlackChannelID, value.SlackThreadTS) (*entity.Incident, error) {
-	return nil, errors.New("not implemented")
+func (m *memIncidents) GetBySlackThread(_ context.Context, ws value.WorkspaceID, ch value.SlackChannelID, ts value.SlackThreadTS) (*entity.Incident, error) {
+	for _, inc := range m.created {
+		if inc.WorkspaceID() == ws && inc.SlackChannelID() == ch && inc.SlackThreadTS() == ts {
+			return inc, nil
+		}
+	}
+	return nil, errors.New("not found")
 }
 func (m *memIncidents) ListActive(context.Context, value.WorkspaceID, int, int) ([]*entity.Incident, error) {
 	return nil, nil
@@ -258,5 +265,43 @@ func TestAlertHandler_SNSConfirmationRequiresAuth(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("expected 401, got %d", rec.Code)
+	}
+}
+
+// A provider retrying the same payload must not open a second incident.
+func TestAlertHandler_DuplicateDeliveryIsIdempotent(t *testing.T) {
+	h := newHarness(t)
+	target := "/api/v1/integrations/alerts/grafana?workspace=T_ALPHA"
+
+	first := h.post(t, target, h.secret, grafanaPayload)
+	second := h.post(t, target, h.secret, grafanaPayload)
+
+	if first.Code != http.StatusAccepted || second.Code != http.StatusOK {
+		t.Fatalf("statuses = %d, %d; want 202 then 200", first.Code, second.Code)
+	}
+	if len(h.incidents.created) != 1 {
+		t.Errorf("duplicate delivery created %d incidents, want 1", len(h.incidents.created))
+	}
+}
+
+func TestSlackRateLimit_BucketsInteractivityByTeam(t *testing.T) {
+	logger := zerolog.Nop()
+	limiter := handler.NewWorkspaceRateLimitMiddleware(1, time.Minute, &logger)
+	h := limiter.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+
+	send := func(team string) int {
+		form := url.Values{"payload": {`{"team":{"id":"` + team + `"}}`}}
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/slack/interactive", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if send("TA") != http.StatusOK || send("TA") != http.StatusTooManyRequests {
+		t.Error("team A should be limited after one request")
+	}
+	if got := send("TB"); got != http.StatusOK {
+		t.Errorf("team B was throttled by team A's traffic (status %d)", got)
 	}
 }
