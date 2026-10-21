@@ -1,0 +1,39 @@
+# promtool test rules deployments/prometheus/alerts_test.yml
+rule_files: [alerts.yml]
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: criaisis_jobs_dead
+        values: "0 0 0 1 1 1"
+      - series: criaisis_queue_depth
+        values: "60x15"
+      - series: 'criaisis_http_requests_total{status="200",method="GET",route="/x"}'
+        values: "0+90x20"
+      - series: 'criaisis_http_requests_total{status="500",method="GET",route="/x"}'
+        values: "0+10x20"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: CriaisisDeadLetteredInvestigation
+        exp_alerts:
+          - exp_labels: { severity: page }
+            exp_annotations:
+              summary: "An investigation exhausted its retries and was dead-lettered"
+              runbook: "docs/OPERATIONS.md#dead-letters"
+      - eval_time: 12m
+        alertname: CriaisisQueueBacklog
+        exp_alerts:
+          - exp_labels: { severity: page }
+            exp_annotations:
+              summary: "60 investigations waiting for a worker for 10 minutes"
+              runbook: "docs/OPERATIONS.md#queue-backlog"
+      - eval_time: 20m
+        alertname: CriaisisHTTP5xxRate
+        exp_alerts:
+          - exp_labels: { severity: page }
+            exp_annotations:
+              summary: "More than 5% of API requests are failing"
+              runbook: "docs/OPERATIONS.md#api-errors"
+      - eval_time: 2m
+        alertname: CriaisisDeadLetteredInvestigation
+        exp_alerts: []
