@@ -52,6 +52,14 @@ export interface RunbookCoverage {
   runbooks: number;
   chunks: number;
   titles: string[];
+  documents?: RunbookDocument[];
+}
+
+export interface RunbookDocument {
+  id: string;
+  title: string;
+  status: "pending" | "indexed" | "failed";
+  chunks: number;
 }
 
 export interface IncidentContext {

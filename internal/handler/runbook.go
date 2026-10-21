@@ -3,6 +3,8 @@ package handler
 import (
 	"errors"
 	"fmt"
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"net/http"
 
 	"criaisis/internal/domain/entity"
@@ -146,26 +148,61 @@ func (h *RunbookHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	docs, err := h.documents.ListSummaries(r.Context(), ws.ID())
+	if err != nil {
+		h.log.Error().Err(err).Msg("listing runbooks")
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not list runbooks"})
+		return
+	}
+	byPersona := map[uuid.UUID][]repository.DocumentSummary{}
+	for _, d := range docs {
+		byPersona[d.PersonaID] = append(byPersona[d.PersonaID], d)
+	}
+
 	coverage := make([]map[string]any, 0, len(personas))
 	for _, persona := range personas {
-		docs, err := h.documents.ListByPersona(r.Context(), ws.ID(), persona.ID())
-		if err != nil {
-			h.log.Error().Err(err).Msg("listing runbooks")
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not list runbooks"})
-			return
-		}
-
-		titles := make([]string, 0, len(docs))
+		own := byPersona[persona.ID()]
+		titles := make([]string, 0, len(own))
+		documents := make([]map[string]any, 0, len(own))
 		var chunks int
-		for _, doc := range docs {
-			titles = append(titles, doc.Title())
-			chunks += doc.ChunkCount()
+		for _, d := range own {
+			titles = append(titles, d.Title)
+			chunks += d.ChunkCount
+			documents = append(documents, map[string]any{
+				"id": d.ID.String(), "title": d.Title, "status": d.Status, "chunks": d.ChunkCount,
+			})
 		}
 		coverage = append(coverage, map[string]any{
 			"persona": persona.Key().String(), "enabled": persona.IsEnabled(),
-			"runbooks": len(docs), "chunks": chunks, "titles": titles,
+			"runbooks": len(own), "chunks": chunks, "titles": titles, "documents": documents,
 		})
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"coverage": coverage})
+}
+
+// Delete removes a runbook and, through the foreign key, all of its chunks, so the
+// specialist stops citing it on the next investigation.
+func (h *RunbookHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	ws, ok := WorkspaceFrom(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "not authenticated"})
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "runbook"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid runbook id"})
+		return
+	}
+	// Scoped lookup first: another tenant's id is indistinguishable from a missing one.
+	if _, err := h.documents.GetByID(r.Context(), ws.ID(), id); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "runbook not found"})
+		return
+	}
+	if err := h.documents.Delete(r.Context(), ws.ID(), id); err != nil {
+		h.log.Error().Err(err).Msg("deleting runbook")
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not delete runbook"})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

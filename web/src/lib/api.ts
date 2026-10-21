@@ -108,6 +108,9 @@ export const api = {
   runbooks: (c: Credentials) =>
     request<{ coverage: RunbookCoverage[] }>(c, "/runbooks"),
 
+  deleteRunbook: (c: Credentials, id: string) =>
+    request<Record<string, never>>(c, `/runbooks/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
   uploadRunbook: (c: Credentials, body: { persona: string; title: string; content: string }) =>
     request<{ status: string; title: string; chunks: number }>(c, "/runbooks", {
       method: "POST",

@@ -45,6 +45,18 @@ function Runbooks() {
     }
   }
 
+  async function remove(id: string, docTitle: string) {
+    if (!window.confirm(`Delete "${docTitle}"? The specialist will stop citing it.`)) return;
+    setMessage(null);
+    try {
+      await api.deleteRunbook(creds, id);
+      setMessage({ tone: "ok", text: `Deleted ${docTitle}` });
+      coverage.reload();
+    } catch (err) {
+      setMessage({ tone: "error", text: err instanceof Error ? err.message : "Delete failed" });
+    }
+  }
+
   async function readFile(file: File) {
     setContent(await file.text());
     if (!title.trim()) setTitle(file.name.replace(/\.(md|markdown|txt)$/i, ""));
@@ -84,10 +96,27 @@ function Runbooks() {
                     <td className="mono">{row.runbooks}</td>
                     <td className="mono">{row.chunks}</td>
                     <td>
-                      {row.titles.length === 0 ? (
+                      {(row.documents ?? []).length === 0 ? (
                         <span style={{ color: "var(--text-muted)" }}>none</span>
                       ) : (
-                        row.titles.join(", ")
+                        <ul style={{ margin: 0, paddingLeft: 0, listStyle: "none" }}>
+                          {(row.documents ?? []).map((doc) => (
+                            <li key={doc.id} className="row" style={{ gap: 8, alignItems: "center" }}>
+                              <span>{doc.title}</span>
+                              {doc.status !== "indexed" ? (
+                                <span className={`badge ${doc.status === "failed" ? "critical" : "muted"}`}>{doc.status}</span>
+                              ) : null}
+                              <button
+                                className="btn subtle small"
+                                type="button"
+                                aria-label={`Delete ${doc.title}`}
+                                onClick={() => remove(doc.id, doc.title)}
+                              >
+                                Delete
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
                       )}
                     </td>
                   </tr>

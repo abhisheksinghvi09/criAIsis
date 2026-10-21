@@ -69,68 +69,26 @@ func (r *PostgresDocumentRepository) GetByContentHash(ctx context.Context, wsID 
 	return r.scanDocument(exec.QueryRow(ctx, query, wsID.UUID(), hash))
 }
 
-func (r *PostgresDocumentRepository) ListByPersona(ctx context.Context, wsID value.WorkspaceID, personaID uuid.UUID) ([]*entity.Document, error) {
-	const query = `
-		SELECT id, workspace_id, persona_id, title, raw_content, content_hash, status, chunk_count, created_at, updated_at
+func (r *PostgresDocumentRepository) ListSummaries(ctx context.Context, wsID value.WorkspaceID) ([]repository.DocumentSummary, error) {
+	rows, err := GetExecutor(ctx, r.pool).Query(ctx, `
+		SELECT id, persona_id, title, status, chunk_count
 		FROM documents
-		WHERE workspace_id = $1 AND persona_id = $2
-		ORDER BY created_at DESC;
-	`
-	exec := GetExecutor(ctx, r.pool)
-	rows, err := exec.Query(ctx, query, wsID.UUID(), personaID)
+		WHERE workspace_id = $1
+		ORDER BY created_at DESC`, wsID.UUID())
 	if err != nil {
-		return nil, fmt.Errorf("listing documents by persona: %w", err)
+		return nil, fmt.Errorf("listing documents: %w", err)
 	}
 	defer rows.Close()
 
-	var docs []*entity.Document
+	var out []repository.DocumentSummary
 	for rows.Next() {
-		var (
-			id          uuid.UUID
-			rawWsID     uuid.UUID
-			pID         uuid.UUID
-			title       string
-			rawContent  string
-			contentHash string
-			rawStatus   string
-			chunkCount  int
-			createdAt   time.Time
-			updatedAt   time.Time
-		)
-
-		if err := rows.Scan(&id, &rawWsID, &pID, &title, &rawContent, &contentHash, &rawStatus, &chunkCount, &createdAt, &updatedAt); err != nil {
-			return nil, fmt.Errorf("scanning document row: %w", err)
+		var d repository.DocumentSummary
+		if err := rows.Scan(&d.ID, &d.PersonaID, &d.Title, &d.Status, &d.ChunkCount); err != nil {
+			return nil, fmt.Errorf("scanning document summary: %w", err)
 		}
-
-		parsedWsID, err := value.FromUUID(rawWsID)
-		if err != nil {
-			return nil, fmt.Errorf("invalid workspace id in document row: %w", err)
-		}
-
-		status, err := value.ParseDocumentStatus(rawStatus)
-		if err != nil {
-			return nil, fmt.Errorf("invalid document status in db: %w", err)
-		}
-
-		docs = append(docs, entity.ReconstituteDocument(
-			id,
-			parsedWsID,
-			pID,
-			title,
-			rawContent,
-			contentHash,
-			status,
-			chunkCount,
-			createdAt,
-			updatedAt,
-		))
+		out = append(out, d)
 	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating document rows: %w", err)
-	}
-
-	return docs, nil
+	return out, rows.Err()
 }
 
 func (r *PostgresDocumentRepository) UpdateStatus(ctx context.Context, wsID value.WorkspaceID, id uuid.UUID, status value.DocumentStatus, chunkCount int) error {

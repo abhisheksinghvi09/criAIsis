@@ -101,6 +101,7 @@ func New(srv *server.Server, h Handlers) http.Handler {
 
 				one.Get("/runbooks", h.Runbook.List)
 				one.Post("/runbooks", h.Runbook.Upload)
+				one.Delete("/runbooks/{runbook}", h.Runbook.Delete)
 
 				one.Get("/incidents", h.Incidents.List)
 				one.Get("/incidents/{incident}", h.Incidents.Show)

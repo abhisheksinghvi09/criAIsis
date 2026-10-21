@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"github.com/google/uuid"
 	"net/http"
 
 	"criaisis/internal/domain/repository"
@@ -37,22 +38,24 @@ func (h *PersonaHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	docs, err := h.documents.ListSummaries(r.Context(), ws.ID())
+	if err != nil {
+		h.log.Error().Err(err).Msg("counting runbooks")
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not count runbooks"})
+		return
+	}
+	runbooks, chunks := map[uuid.UUID]int{}, map[uuid.UUID]int{}
+	for _, d := range docs {
+		runbooks[d.PersonaID]++
+		chunks[d.PersonaID] += d.ChunkCount
+	}
+
 	rendered := make([]map[string]any, 0, len(personas))
 	for _, persona := range personas {
-		docs, err := h.documents.ListByPersona(r.Context(), ws.ID(), persona.ID())
-		if err != nil {
-			h.log.Error().Err(err).Msg("counting runbooks")
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not count runbooks"})
-			return
-		}
-		var chunks int
-		for _, doc := range docs {
-			chunks += doc.ChunkCount()
-		}
 		rendered = append(rendered, map[string]any{
 			"key": persona.Key().String(), "display_name": persona.DisplayName(),
 			"system_prompt": persona.SystemPrompt(), "enabled": persona.IsEnabled(),
-			"runbooks": len(docs), "chunks": chunks,
+			"runbooks": runbooks[persona.ID()], "chunks": chunks[persona.ID()],
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"specialists": rendered})
