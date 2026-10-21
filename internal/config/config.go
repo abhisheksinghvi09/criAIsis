@@ -139,6 +139,18 @@ func LoadConfigFromEnviron(environ []string) (*Config, error) {
 		return nil, errors.New("config validation failed: database.ssl_mode must not be \"disable\" when primary.env is \"production\"")
 	}
 
+	if mainConfig.Primary.Env == "production" {
+		for name, secret := range map[string]string{
+			"credential_encryption_key": mainConfig.Security.CredentialEncryptionKey,
+			"admin_api_key":             mainConfig.Security.AdminAPIKey,
+		} {
+			// .env.example ships "change-me-..." values that satisfy every length rule.
+			if strings.Contains(strings.ToLower(secret), "change-me") {
+				return nil, fmt.Errorf("config validation failed: security.%s is still the .env.example placeholder", name)
+			}
+		}
+	}
+
 	return &mainConfig, nil
 }
 

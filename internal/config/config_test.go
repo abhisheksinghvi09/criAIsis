@@ -203,3 +203,25 @@ func TestDatabaseConfig_DSN_PasswordWithSpace(t *testing.T) {
 		t.Errorf("expected DSN '%s', got '%s'", expected, dsn)
 	}
 }
+
+func TestLoadConfigFromEnviron_RejectsPlaceholderSecretsInProduction(t *testing.T) {
+	for _, tc := range []struct{ name, key, val string }{
+		{"encryption key", "CRIAISIS_SECURITY_CREDENTIAL_ENCRYPTION_KEY=", "change-me-to-32-characters-now!!"},
+		{"admin key", "CRIAISIS_SECURITY_ADMIN_API_KEY=", "change-me-to-a-long-random-string"},
+	} {
+		env := validEnviron()
+		for i, v := range env {
+			switch {
+			case strings.HasPrefix(v, "CRIAISIS_PRIMARY_ENV="):
+				env[i] = "CRIAISIS_PRIMARY_ENV=production"
+			case strings.HasPrefix(v, "CRIAISIS_DATABASE_SSL_MODE="):
+				env[i] = "CRIAISIS_DATABASE_SSL_MODE=require"
+			case strings.HasPrefix(v, tc.key):
+				env[i] = tc.key + tc.val
+			}
+		}
+		if _, err := LoadConfigFromEnviron(env); err == nil {
+			t.Errorf("%s: placeholder accepted in production", tc.name)
+		}
+	}
+}
