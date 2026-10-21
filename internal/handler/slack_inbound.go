@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -92,8 +93,8 @@ func (h *SlackInboundHandler) HandleInstall(w http.ResponseWriter, r *http.Reque
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: oauthStateCookie, Value: state, Path: "/slack/oauth", MaxAge: int(oauthStateTTL.Seconds()),
-		HttpOnly: true, SameSite: http.SameSiteLaxMode,
-		Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
+		// Slack only redirects to https URLs, so the cookie is always Secure.
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: true,
 	})
 	q := url.Values{"client_id": {h.clientID}, "scope": {slackScopes}, "state": {state}}
 	http.Redirect(w, r, "https://slack.com/oauth/v2/authorize?"+q.Encode(), http.StatusFound)
@@ -151,7 +152,10 @@ func (h *SlackInboundHandler) HandleOAuthCallback(w http.ResponseWriter, r *http
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid or expired install state; start again from /slack/install"})
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: oauthStateCookie, Path: "/slack/oauth", MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{
+		Name: oauthStateCookie, Path: "/slack/oauth", MaxAge: -1,
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: true,
+	})
 
 	code := r.URL.Query().Get("code")
 	if code == "" {
@@ -214,10 +218,12 @@ func (h *SlackInboundHandler) HandleOAuthCallback(w http.ResponseWriter, r *http
 
 	h.log.Info().Str("team_id", res.Team.ID).Str("team_name", res.Team.Name).Msg("slack app installed successfully")
 	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	// Plain text with nosniff (set globally): the team id from Slack cannot run as markup.
 	_, _ = fmt.Fprintf(w, "Slack installation successful!\n\n"+
 		"Workspace: %s\nAdmin key (dashboard sign-in): %s\nAlert token (monitoring webhooks): %s\n\n"+
 		"Both credentials are shown once and stored only as digests. Save them now.\n",
-		res.Team.ID, creds.AdminKey, creds.AlertToken)
+		html.EscapeString(res.Team.ID), creds.AdminKey, creds.AlertToken)
 }
 
 // HandleCommand processes slash commands (/criaisis investigate, /criaisis resolve).

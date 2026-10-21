@@ -1,6 +1,6 @@
 module criaisis
 
-go 1.27.0
+go 1.27.3
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.73.0

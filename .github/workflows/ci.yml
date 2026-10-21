@@ -57,7 +57,7 @@ jobs:
       - name: Lint (golangci-lint, gosec enabled)
         uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.5.0
+          version: v2.15.0
 
       - name: Vulnerability scan (govulncheck)
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
