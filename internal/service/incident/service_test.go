@@ -95,7 +95,9 @@ func (fakeChunkRepo) GetByID(context.Context, value.WorkspaceID, uuid.UUID) (*en
 func (fakeChunkRepo) ListByDocument(context.Context, value.WorkspaceID, uuid.UUID) ([]*entity.DocumentChunk, error) {
 	return nil, nil
 }
-func (fakeChunkRepo) DeleteByDocument(context.Context, value.WorkspaceID, uuid.UUID) error { return nil }
+func (fakeChunkRepo) DeleteByDocument(context.Context, value.WorkspaceID, uuid.UUID) error {
+	return nil
+}
 func (fakeChunkRepo) SearchHybrid(context.Context, value.WorkspaceID, uuid.UUID, string, value.EmbeddingVector, int) ([]*repository.SearchResult, error) {
 	return nil, nil
 }

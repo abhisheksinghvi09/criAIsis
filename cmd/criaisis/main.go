@@ -29,6 +29,9 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// version identifies this build in traces; set with -ldflags "-X main.version=...".
+var version = "dev"
+
 // shutdownTimeout gives in-flight requests and running debates time to finish.
 const shutdownTimeout = 30 * time.Second
 
@@ -47,6 +50,12 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	shutdownTracing, err := telemetry.InitTracing(ctx, version)
+	if err != nil {
+		logger.Error().Err(err).Msg("tracing disabled: exporter setup failed")
+	}
+	defer func() { _ = shutdownTracing(context.Background()) }() // flush buffered spans
 
 	if err := database.Migrate(ctx, &logger, cfg); err != nil {
 		logger.Fatal().Err(err).Msg("database migration failed")
@@ -129,7 +138,7 @@ func main() {
 		sandboxHandler = handler.NewSandboxHandler(sandboxSvc, srv.Logger)
 	}
 
-	srv.SetupHTTPServer(router.New(srv, router.Handlers{
+	srv.SetupHTTPServer(telemetry.HTTPHandler(router.New(srv, router.Handlers{
 		Alert: handler.NewAlertHandler(repos.workspaces, incidents, &logger),
 		Workspace: handler.NewWorkspaceHandler(
 			repos.workspaces, repos.personas, repos.settings, repos.tx, resolver, incidents, cipher,
@@ -144,7 +153,7 @@ func main() {
 		SlackRateLimit: slackRate,
 		SlackInbound:   slackInbound,
 		Sandbox:        sandboxHandler,
-	}))
+	})))
 
 	go func() {
 		if err := srv.Start(); err != nil {

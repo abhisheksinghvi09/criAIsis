@@ -16,6 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var (
@@ -82,6 +83,9 @@ func Middleware(log *zerolog.Logger) func(http.Handler) http.Handler {
 			}
 			elapsed := time.Since(start)
 
+			span := trace.SpanFromContext(r.Context())
+			span.SetName(r.Method + " " + route) // bounded cardinality, like the metrics
+
 			httpRequests.WithLabelValues(r.Method, route, strconv.Itoa(status)).Inc()
 			httpDuration.WithLabelValues(route).Observe(elapsed.Seconds())
 
@@ -90,6 +94,7 @@ func Middleware(log *zerolog.Logger) func(http.Handler) http.Handler {
 			}
 			log.Info().
 				Str("request_id", middleware.GetReqID(r.Context())).
+				Str("trace_id", traceID(span)).
 				Str("method", r.Method).Str("route", route).Str("path", r.URL.Path).
 				Int("status", status).Int("bytes", ww.BytesWritten()).
 				Dur("duration", elapsed).
@@ -110,4 +115,12 @@ func Handler(token string) http.Handler {
 		}
 		h.ServeHTTP(w, r)
 	})
+}
+
+// traceID returns the span's trace id for log correlation, or "" when untraced.
+func traceID(span trace.Span) string {
+	if sc := span.SpanContext(); sc.HasTraceID() {
+		return sc.TraceID().String()
+	}
+	return ""
 }

@@ -17,6 +17,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // JobQueueConfig tunes the durable queue. Zero values take the defaults below.
@@ -346,10 +350,22 @@ func (q *PostgresJobQueue) run(workerID string, c claimed, handler job.Handler) 
 	ctx, cancel := context.WithCancelCause(q.jobCtx)
 	defer cancel(nil)
 
+	ctx, span := otel.Tracer("criaisis").Start(ctx, "job.investigate", trace.WithAttributes(
+		attribute.String("incident.id", c.job.IncidentID.String()),
+		attribute.String("workspace.id", c.job.WorkspaceID.String()),
+		attribute.Int("job.attempt", c.attempts),
+		attribute.Int("job.max_attempts", c.maxAttempts),
+	))
+	defer span.End()
+
 	hbStop, hbDone := make(chan struct{}), make(chan struct{})
 	go q.heartbeat(c.id, workerID, cancel, hbStop, hbDone)
 
 	err := safeCall(ctx, handler, c.job)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "job failed")
+	}
 
 	close(hbStop)
 	<-hbDone

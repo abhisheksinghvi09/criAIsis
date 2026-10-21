@@ -13,8 +13,25 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 )
+
+// tracer covers the clash: one span per run, per specialist and for synthesis,
+// so a slow verdict shows which model call it waited on.
+var tracer = otel.Tracer("criaisis/orchestrator")
+
+// endSpan records the outcome and closes the span.
+func endSpan(span trace.Span, err error) {
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	span.End()
+}
 
 // retrievalTopK is how many runbook excerpts each specialist is grounded in.
 // Wide enough to cover a procedure, narrow enough to keep Stage 1 inside its budget.
@@ -81,7 +98,10 @@ func (r ClashResult) SucceededCount() int { return succeeded(r.Stage1) }
 // Stage 1 degrades gracefully by design: a persona whose model call or retrieval
 // fails is recorded as a failed outcome and the remaining specialists and the
 // consensus still post. Only a total Stage 1 washout aborts the clash.
-func (o *Orchestrator) RunClash(ctx context.Context, inc *entity.Incident) (*ClashResult, error) {
+func (o *Orchestrator) RunClash(ctx context.Context, inc *entity.Incident) (_ *ClashResult, err error) {
+	ctx, span := tracer.Start(ctx, "clash", trace.WithAttributes(attribute.String("incident.id", inc.ID().String())))
+	defer func() { endSpan(span, err) }()
+
 	if done, err := o.hasSynthesis(ctx, inc); err != nil {
 		return nil, err
 	} else if done {
@@ -206,7 +226,9 @@ func (o *Orchestrator) runSpecialist(
 	persona *entity.Persona,
 	query string,
 	queryEmbedding value.EmbeddingVector,
-) (SpecialistResult, *entity.DebateTurn, error) {
+) (_ SpecialistResult, _ *entity.DebateTurn, err error) {
+	ctx, span := tracer.Start(ctx, "clash.specialist", trace.WithAttributes(attribute.String("persona", persona.Key().String())))
+	defer func() { endSpan(span, err) }()
 	var empty SpecialistResult
 
 	results, err := o.chunks.SearchHybrid(ctx, inc.WorkspaceID(), persona.ID(), query, queryEmbedding, retrievalTopK)
@@ -248,7 +270,9 @@ func (o *Orchestrator) runSpecialist(
 }
 
 // runStage2 cross-examines the Stage 1 hypotheses into a single consensus verdict.
-func (o *Orchestrator) runStage2(ctx context.Context, inc *entity.Incident, outcomes []SpecialistOutcome) (SynthesisResult, *entity.DebateTurn, error) {
+func (o *Orchestrator) runStage2(ctx context.Context, inc *entity.Incident, outcomes []SpecialistOutcome) (_ SynthesisResult, _ *entity.DebateTurn, err error) {
+	ctx, span := tracer.Start(ctx, "clash.synthesis")
+	defer func() { endSpan(span, err) }()
 	var empty SynthesisResult
 
 	raw, err := o.chat.Complete(ctx, llm.ChatRequest{

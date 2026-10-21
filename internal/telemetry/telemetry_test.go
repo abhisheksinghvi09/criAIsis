@@ -1,6 +1,7 @@
 package telemetry_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 func TestMiddleware_LogsRouteNotQueryAndNeverLeaksIt(t *testing.T) {
@@ -45,5 +50,37 @@ func TestHandler_RequiresTheBearerToken(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "criaisis_") && !strings.Contains(rec.Body.String(), "go_goroutines") {
 		t.Errorf("with token: status = %d", rec.Code)
+	}
+}
+
+func TestTracing_NamesSpansByRouteAndCorrelatesLogs(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() { otel.SetTracerProvider(noop.NewTracerProvider()) })
+
+	var out strings.Builder
+	log := zerolog.New(&out)
+	r := chi.NewRouter()
+	r.Use(telemetry.Middleware(&log))
+	r.Get("/incidents/{id}", func(w http.ResponseWriter, r *http.Request) {})
+
+	telemetry.HTTPHandler(r).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/incidents/123", nil))
+
+	spans := recorder.Ended()
+	if len(spans) != 1 || spans[0].Name() != "GET /incidents/{id}" {
+		t.Fatalf("spans = %v, want one named by route", spans)
+	}
+	if want := spans[0].SpanContext().TraceID().String(); !strings.Contains(out.String(), want) {
+		t.Errorf("access log lacks trace id %s: %s", want, out.String())
+	}
+}
+
+func TestInitTracing_IsANoOpWithoutAnEndpoint(t *testing.T) {
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
+	shutdown, err := telemetry.InitTracing(context.Background(), "test")
+	if err != nil || shutdown(context.Background()) != nil {
+		t.Errorf("no-op tracing returned an error: %v", err)
 	}
 }
