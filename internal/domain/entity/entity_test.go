@@ -246,3 +246,93 @@ func TestIncident_TriggerTypeAndContext(t *testing.T) {
 		t.Errorf("expected 1 error log, got %d", len(retrievedCtx.ErrorLogs()))
 	}
 }
+
+// The webhook secret guards a public ingress endpoint, so its failure modes matter
+// more than its happy path.
+func TestWorkspace_WebhookSecret(t *testing.T) {
+	ws, err := NewWorkspace("T_HOOK", "Hook Team", []byte("01234567890123456789012345678901"))
+	if err != nil {
+		t.Fatalf("building workspace: %v", err)
+	}
+
+	// A workspace that has never generated a secret must reject everything.
+	if ws.VerifyWebhookSecret("") {
+		t.Error("empty token accepted before a secret was generated")
+	}
+	if ws.VerifyWebhookSecret("anything") {
+		t.Error("arbitrary token accepted before a secret was generated")
+	}
+
+	secret, err := ws.GenerateWebhookSecret()
+	if err != nil {
+		t.Fatalf("generating secret: %v", err)
+	}
+	if secret == "" {
+		t.Fatal("generated secret is empty")
+	}
+	if !ws.VerifyWebhookSecret(secret) {
+		t.Error("the generated secret should verify")
+	}
+	if ws.VerifyWebhookSecret(secret + "x") {
+		t.Error("a near-miss token verified")
+	}
+	if ws.VerifyWebhookSecret("") {
+		t.Error("empty token verified against a configured secret")
+	}
+
+	// Only the digest is retained; the plaintext must not be recoverable.
+	if string(ws.WebhookSecretHash()) == secret {
+		t.Error("the plaintext secret was stored instead of its digest")
+	}
+
+	// The admin key is a separate privilege: the alert token must not administer
+	// the workspace, and vice versa.
+	adminKey, err := ws.GenerateAdminAPIKey()
+	if err != nil {
+		t.Fatalf("generating admin key: %v", err)
+	}
+	if ws.VerifyAdminAPIKey(secret) {
+		t.Error("the alert token was accepted as an admin key")
+	}
+	if ws.VerifyWebhookSecret(adminKey) {
+		t.Error("the admin key was accepted as an alert token")
+	}
+	if !ws.VerifyAdminAPIKey(adminKey) {
+		t.Error("the admin key does not verify")
+	}
+
+	// Regenerating must invalidate the previous credential.
+	rotated, err := ws.GenerateWebhookSecret()
+	if err != nil {
+		t.Fatalf("rotating secret: %v", err)
+	}
+	if ws.VerifyWebhookSecret(secret) {
+		t.Error("the old secret still verifies after rotation")
+	}
+	if !ws.VerifyWebhookSecret(rotated) {
+		t.Error("the rotated secret does not verify")
+	}
+}
+
+func TestWorkspaceSettings_SlackBotNeedsNoWebhookAndOnCallNeedsKeyAndSchedule(t *testing.T) {
+	s, err := NewWorkspaceSettings(value.NewWorkspaceID(), SettingsDefaults{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetNotificationTarget("slack_bot", nil); err != nil || !s.UsesIncidentChannels() {
+		t.Errorf("slack_bot without a webhook: err=%v channels=%v", err, s.UsesIncidentChannels())
+	}
+	if err := s.SetNotificationTarget("slack", nil); err == nil {
+		t.Error("slack webhook provider accepted without a url")
+	}
+
+	if err := s.SetOnCall("pagerduty", []byte("sealed"), " "); err == nil {
+		t.Error("on-call accepted without a schedule id")
+	}
+	if err := s.SetOnCall("pagerduty", []byte("sealed"), "P123"); err != nil || s.OnCallScheduleID() != "P123" {
+		t.Errorf("valid on-call rejected: %v", err)
+	}
+	if err := s.SetOnCall("none", []byte("x"), "P123"); err != nil || len(s.OnCallAPIKeyEncrypted()) != 0 || s.OnCallScheduleID() != "" {
+		t.Errorf("clearing on-call left data behind: %v", err)
+	}
+}

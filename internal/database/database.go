@@ -7,7 +7,9 @@ import (
 
 	"criaisis/internal/config"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	pgxvector "github.com/pgvector/pgvector-go/pgx"
 	"github.com/rs/zerolog"
 )
 
@@ -29,18 +31,29 @@ func New(cfg *config.Config, logger *zerolog.Logger) (*Database, error) {
 		return nil, fmt.Errorf("failed to parse pgx pool config: %w", err)
 	}
 
-	// Apply connection pool sizing and connection lifetime limits
+	// Apply connection pool sizing and connection lifetime limits. These are
+	// operator-set deployment config, not attacker input, and a pool sized
+	// anywhere near int32's range would exhaust Postgres's connection limit
+	// long before the conversion could overflow.
 	if cfg.Database.MaxOpenConns > 0 {
-		pgxPoolConfig.MaxConns = int32(cfg.Database.MaxOpenConns)
+		pgxPoolConfig.MaxConns = int32(cfg.Database.MaxOpenConns) // #nosec G115 -- operator-controlled, not attacker input
 	}
 	if cfg.Database.MaxIdleConns > 0 {
-		pgxPoolConfig.MinConns = int32(cfg.Database.MaxIdleConns)
+		pgxPoolConfig.MinConns = int32(cfg.Database.MaxIdleConns) // #nosec G115 -- operator-controlled, not attacker input
 	}
 	if cfg.Database.ConnMaxLifetime > 0 {
 		pgxPoolConfig.MaxConnLifetime = time.Duration(cfg.Database.ConnMaxLifetime) * time.Second
 	}
 	if cfg.Database.ConnMaxIdleTime > 0 {
 		pgxPoolConfig.MaxConnIdleTime = time.Duration(cfg.Database.ConnMaxIdleTime) * time.Second
+	}
+
+	// Without this, pgx has no binary codec for the vector type: every vector
+	// column goes through COPY (chunk_repo.go's BatchCreate) or the extended
+	// query protocol with a garbage encoding instead of pgvector's wire format,
+	// which pgvector rejects or silently misreads.
+	pgxPoolConfig.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		return pgxvector.RegisterTypes(ctx, conn)
 	}
 
 	pool, err := pgxpool.NewWithConfig(context.Background(), pgxPoolConfig)

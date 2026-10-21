@@ -208,14 +208,31 @@ func (r *PostgresChunkRepository) SearchHybrid(
 			(COALESCE(1.0 / (60.0 + d.rank), 0.0) + COALESCE(1.0 / (60.0 + s.rank), 0.0)) as rrf_score
 		FROM dense_search d
 		FULL OUTER JOIN sparse_search s ON d.id = s.id
-		JOIN documents doc ON doc.id = COALESCE(d.document_id, s.document_id)
+		JOIN documents doc ON doc.id = COALESCE(d.document_id, s.document_id) AND doc.workspace_id = $1
 		ORDER BY rrf_score DESC
 		LIMIT $5;
 	`
 
 	vec := pgvector.NewVector(queryEmbedding.Slice())
-	exec := GetExecutor(ctx, r.pool)
-	rows, err := exec.Query(ctx, query, wsID.UUID(), personaID, queryText, vec, limit)
+
+	// HNSW returns its nearest candidates first and applies the tenant/persona
+	// filter afterwards, so if the planner picks it while a larger tenant's vectors
+	// sit closer to the query, every candidate is filtered out and retrieval
+	// silently returns nothing (measured: 0 of 20). Iterative scans keep walking
+	// the graph until enough rows pass the filter; strict_order keeps the result
+	// ordered by distance. SET LOCAL scopes this to one read-only transaction.
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, fmt.Errorf("starting search transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL hnsw.iterative_scan = strict_order;
+		SET LOCAL hnsw.ef_search = 100;
+		SET LOCAL hnsw.max_scan_tuples = 50000`); err != nil {
+		return nil, fmt.Errorf("tuning vector search: %w", err)
+	}
+
+	rows, err := tx.Query(ctx, query, wsID.UUID(), personaID, queryText, vec, limit)
 	if err != nil {
 		return nil, fmt.Errorf("executing hybrid search: %w", err)
 	}

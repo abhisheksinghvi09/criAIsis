@@ -1,0 +1,66 @@
+# Alerting rules for criAIsis. Each alert names what broke for the people it
+# would have paged, and points at the runbook section in docs/OPERATIONS.md.
+groups:
+  - name: criaisis
+    rules:
+      - alert: CriaisisDown
+        expr: up{job="criaisis"} == 0
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: "criAIsis API is down: alerts are not being investigated"
+          runbook: "docs/OPERATIONS.md#api-down"
+
+      - alert: CriaisisDeadLetteredInvestigation
+        # Any new dead letter is an incident whose investigation reached nobody.
+        expr: delta(criaisis_jobs_dead[15m]) > 0
+        labels: { severity: page }
+        annotations:
+          summary: "An investigation exhausted its retries and was dead-lettered"
+          runbook: "docs/OPERATIONS.md#dead-letters"
+
+      - alert: CriaisisQueueBacklog
+        expr: criaisis_queue_depth > 50
+        for: 10m
+        labels: { severity: page }
+        annotations:
+          summary: "{{ $value }} investigations waiting for a worker for 10 minutes"
+          runbook: "docs/OPERATIONS.md#queue-backlog"
+
+      - alert: CriaisisInvestigationFailureRate
+        expr: |
+          sum(rate(criaisis_investigations_total{outcome="failed"}[15m]))
+            / clamp_min(sum(rate(criaisis_investigations_total{outcome=~"ok|failed"}[15m])), 1e-9) > 0.2
+        for: 15m
+        labels: { severity: ticket }
+        annotations:
+          summary: "More than 20% of investigations are failing"
+          runbook: "docs/OPERATIONS.md#failing-investigations"
+
+      - alert: CriaisisRetryStorm
+        expr: sum(rate(criaisis_investigations_total{outcome="retry"}[10m])) > 0.2
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: "Investigations are retrying continuously (a dependency is failing)"
+          runbook: "docs/OPERATIONS.md#failing-investigations"
+
+      - alert: CriaisisSlowInvestigations
+        # The product promise is a verdict in about 25s.
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(criaisis_investigation_duration_seconds_bucket[30m]))) > 60
+        for: 30m
+        labels: { severity: ticket }
+        annotations:
+          summary: "p95 investigation time is {{ $value | humanizeDuration }}"
+          runbook: "docs/OPERATIONS.md#slow-investigations"
+
+      - alert: CriaisisHTTP5xxRate
+        expr: |
+          sum(rate(criaisis_http_requests_total{status=~"5.."}[10m]))
+            / clamp_min(sum(rate(criaisis_http_requests_total[10m])), 1e-9) > 0.05
+        for: 10m
+        labels: { severity: page }
+        annotations:
+          summary: "More than 5% of API requests are failing"
+          runbook: "docs/OPERATIONS.md#api-errors"

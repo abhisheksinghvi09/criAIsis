@@ -58,7 +58,7 @@ func (r *PostgresIncidentRepository) Create(ctx context.Context, inc *entity.Inc
 func (r *PostgresIncidentRepository) GetByID(ctx context.Context, wsID value.WorkspaceID, id uuid.UUID) (*entity.Incident, error) {
 	const query = `
 		SELECT id, workspace_id, title, description, slack_channel_id, slack_thread_ts,
-		       severity, status, created_by_slack_user_id, metadata, resolved_at, created_at, updated_at
+		       severity, status, created_by_slack_user_id, metadata, resolved_at, created_at, updated_at, version
 		FROM incidents
 		WHERE workspace_id = $1 AND id = $2;
 	`
@@ -69,12 +69,25 @@ func (r *PostgresIncidentRepository) GetByID(ctx context.Context, wsID value.Wor
 func (r *PostgresIncidentRepository) GetBySlackThread(ctx context.Context, wsID value.WorkspaceID, channelID value.SlackChannelID, threadTS value.SlackThreadTS) (*entity.Incident, error) {
 	const query = `
 		SELECT id, workspace_id, title, description, slack_channel_id, slack_thread_ts,
-		       severity, status, created_by_slack_user_id, metadata, resolved_at, created_at, updated_at
+		       severity, status, created_by_slack_user_id, metadata, resolved_at, created_at, updated_at, version
 		FROM incidents
 		WHERE workspace_id = $1 AND slack_channel_id = $2 AND slack_thread_ts = $3;
 	`
 	exec := GetExecutor(ctx, r.pool)
 	return r.scanIncident(exec.QueryRow(ctx, query, wsID.UUID(), channelID.String(), threadTS.String()))
+}
+
+func (r *PostgresIncidentRepository) GetLatestByChannel(ctx context.Context, wsID value.WorkspaceID, channelID value.SlackChannelID) (*entity.Incident, error) {
+	const query = `
+		SELECT id, workspace_id, title, description, slack_channel_id, slack_thread_ts,
+		       severity, status, created_by_slack_user_id, metadata, resolved_at, created_at, updated_at, version
+		FROM incidents
+		WHERE workspace_id = $1 AND slack_channel_id = $2
+		ORDER BY created_at DESC
+		LIMIT 1;
+	`
+	exec := GetExecutor(ctx, r.pool)
+	return r.scanIncident(exec.QueryRow(ctx, query, wsID.UUID(), channelID.String()))
 }
 
 func (r *PostgresIncidentRepository) ListActive(ctx context.Context, wsID value.WorkspaceID, limit, offset int) ([]*entity.Incident, error) {
@@ -83,7 +96,7 @@ func (r *PostgresIncidentRepository) ListActive(ctx context.Context, wsID value.
 	}
 	const query = `
 		SELECT id, workspace_id, title, description, slack_channel_id, slack_thread_ts,
-		       severity, status, created_by_slack_user_id, metadata, resolved_at, created_at, updated_at
+		       severity, status, created_by_slack_user_id, metadata, resolved_at, created_at, updated_at, version
 		FROM incidents
 		WHERE workspace_id = $1 AND status = 'investigating'
 		ORDER BY created_at DESC
@@ -105,7 +118,7 @@ func (r *PostgresIncidentRepository) ListRecent(ctx context.Context, wsID value.
 	}
 	const query = `
 		SELECT id, workspace_id, title, description, slack_channel_id, slack_thread_ts,
-		       severity, status, created_by_slack_user_id, metadata, resolved_at, created_at, updated_at
+		       severity, status, created_by_slack_user_id, metadata, resolved_at, created_at, updated_at, version
 		FROM incidents
 		WHERE workspace_id = $1
 		ORDER BY created_at DESC
@@ -121,6 +134,40 @@ func (r *PostgresIncidentRepository) ListRecent(ctx context.Context, wsID value.
 	return r.scanIncidentList(rows)
 }
 
+// orphaned matches incidents whose investigation never finished and that no job
+// is working on: still investigating, no synthesis turn, no live job. A finished
+// investigation also stays "investigating" until a human resolves it, which is
+// why the transcript, not the status, decides.
+const orphaned = `
+	i.status = 'investigating'
+	AND NOT EXISTS (SELECT 1 FROM debate_turns t WHERE t.incident_id = i.id AND t.turn_type = 'synthesis')
+	AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.incident_id = i.id AND j.status IN ('queued', 'running'))`
+
+// RecoverOrphaned runs at startup. Orphans younger than requeueWindow get a fresh
+// job (their work was lost, e.g. by a release that predates the durable queue);
+// older ones are marked failed, because a days-old investigation arriving now
+// would only confuse the people it pages.
+func (r *PostgresIncidentRepository) RecoverOrphaned(ctx context.Context, requeueWindow time.Duration) (requeued, failed int64, err error) {
+	exec := GetExecutor(ctx, r.pool)
+	tag, err := exec.Exec(ctx, `
+		INSERT INTO jobs (workspace_id, incident_id)
+		SELECT i.workspace_id, i.id FROM incidents i
+		WHERE `+orphaned+` AND i.created_at >= now() - make_interval(secs => $1)
+		ON CONFLICT (incident_id) WHERE status IN ('queued', 'running') DO NOTHING`, requeueWindow.Seconds())
+	if err != nil {
+		return 0, 0, fmt.Errorf("requeueing orphaned incidents: %w", err)
+	}
+	requeued = tag.RowsAffected()
+
+	tag, err = exec.Exec(ctx, `
+		UPDATE incidents i SET status = 'failed', updated_at = now()
+		WHERE `+orphaned+` AND i.created_at < now() - make_interval(secs => $1)`, requeueWindow.Seconds())
+	if err != nil {
+		return requeued, 0, fmt.Errorf("failing stale orphaned incidents: %w", err)
+	}
+	return requeued, tag.RowsAffected(), nil
+}
+
 func (r *PostgresIncidentRepository) Update(ctx context.Context, inc *entity.Incident) error {
 	const query = `
 		UPDATE incidents
@@ -128,11 +175,16 @@ func (r *PostgresIncidentRepository) Update(ctx context.Context, inc *entity.Inc
 		    status = $4,
 		    metadata = $5,
 		    resolved_at = $6,
-		    updated_at = $7
-		WHERE workspace_id = $1 AND id = $2;
+		    updated_at = $7,
+		    slack_channel_id = $8,
+		    slack_thread_ts = $9,
+		    version = version + 1
+		WHERE workspace_id = $1 AND id = $2 AND version = $10
+		RETURNING version;
 	`
 	exec := GetExecutor(ctx, r.pool)
-	tag, err := exec.Exec(ctx, query,
+	var version int64
+	err := exec.QueryRow(ctx, query,
 		inc.WorkspaceID().UUID(),
 		inc.ID(),
 		inc.Severity().String(),
@@ -140,13 +192,17 @@ func (r *PostgresIncidentRepository) Update(ctx context.Context, inc *entity.Inc
 		inc.Metadata(),
 		inc.ResolvedAt(),
 		inc.UpdatedAt(),
-	)
+		inc.SlackChannelID().String(),
+		inc.SlackThreadTS().String(),
+		inc.Version(),
+	).Scan(&version)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return conflictOrMissing(ctx, exec, "incidents", "id = $1 AND workspace_id = $2", inc.ID(), inc.WorkspaceID().UUID())
+	}
 	if err != nil {
 		return fmt.Errorf("updating incident: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("incident '%s' not found for update in workspace '%s'", inc.ID(), inc.WorkspaceID())
-	}
+	inc.WithVersion(version)
 	return nil
 }
 
@@ -165,11 +221,12 @@ func (r *PostgresIncidentRepository) scanIncident(row pgx.Row) (*entity.Incident
 		resolvedAt  *time.Time
 		createdAt   time.Time
 		updatedAt   time.Time
+		version     int64
 	)
 
 	err := row.Scan(
 		&id, &rawWsID, &title, &description, &channelID, &threadTS,
-		&rawSeverity, &rawStatus, &creatorID, &metadata, &resolvedAt, &createdAt, &updatedAt,
+		&rawSeverity, &rawStatus, &creatorID, &metadata, &resolvedAt, &createdAt, &updatedAt, &version,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -222,7 +279,7 @@ func (r *PostgresIncidentRepository) scanIncident(row pgx.Row) (*entity.Incident
 		resolvedAt,
 		createdAt,
 		updatedAt,
-	), nil
+	).WithVersion(version), nil
 }
 
 func (r *PostgresIncidentRepository) scanIncidentList(rows pgx.Rows) ([]*entity.Incident, error) {
@@ -242,11 +299,12 @@ func (r *PostgresIncidentRepository) scanIncidentList(rows pgx.Rows) ([]*entity.
 			resolvedAt  *time.Time
 			createdAt   time.Time
 			updatedAt   time.Time
+			version     int64
 		)
 
 		if err := rows.Scan(
 			&id, &rawWsID, &title, &description, &channelID, &threadTS,
-			&rawSeverity, &rawStatus, &creatorID, &metadata, &resolvedAt, &createdAt, &updatedAt,
+			&rawSeverity, &rawStatus, &creatorID, &metadata, &resolvedAt, &createdAt, &updatedAt, &version,
 		); err != nil {
 			return nil, fmt.Errorf("scanning incident row: %w", err)
 		}
@@ -295,7 +353,7 @@ func (r *PostgresIncidentRepository) scanIncidentList(rows pgx.Rows) ([]*entity.
 			resolvedAt,
 			createdAt,
 			updatedAt,
-		))
+		).WithVersion(version))
 	}
 
 	if err := rows.Err(); err != nil {

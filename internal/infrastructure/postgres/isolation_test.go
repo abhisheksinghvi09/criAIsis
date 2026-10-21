@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"criaisis/internal/config"
@@ -38,6 +39,81 @@ func getTestPool(t *testing.T) *pgxpool.Pool {
 	}
 
 	return db.Pool
+}
+
+// isolatedPool gives a test its own freshly migrated database, dropped afterwards.
+// Use it for anything that acts on every row (key rotation, orphan recovery), so
+// a test can never touch a developer's data in the shared database.
+func isolatedPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	admin := getTestPool(t)
+	defer admin.Close()
+
+	cfg, _ := config.LoadConfig()
+	name := "criaisis_test_" + strings.ReplaceAll(uuid.NewString()[:8], "-", "")
+	ctx := context.Background()
+	if _, err := admin.Exec(ctx, "CREATE DATABASE "+name); err != nil {
+		t.Skipf("cannot create an isolated database: %v", err)
+	}
+
+	cfg.Database.Name = name
+	logger := zerolog.Nop()
+	if err := database.Migrate(ctx, &logger, cfg); err != nil {
+		t.Fatalf("migrating isolated database: %v", err)
+	}
+	db, err := database.New(cfg, &logger)
+	if err != nil {
+		t.Fatalf("connecting to isolated database: %v", err)
+	}
+	t.Cleanup(func() {
+		db.Pool.Close()
+		cleanup := getTestPool(t)
+		defer cleanup.Close()
+		_, _ = cleanup.Exec(context.Background(), "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)")
+	})
+	return db.Pool
+}
+
+// TestPostgresTxManager_RollsBackOnFailure proves workspace provisioning is
+// atomic: if any write in the sequence fails, none of them stick. Without
+// this, a failure partway through (e.g. seeding the default personas) would
+// leave a workspace row that exists but can never run an investigation.
+func TestPostgresTxManager_RollsBackOnFailure(t *testing.T) {
+	pool := getTestPool(t)
+	defer pool.Close()
+
+	ctx := context.Background()
+	wsRepo := postgres.NewWorkspaceRepository(pool)
+	txMgr := postgres.NewTxManager(pool)
+
+	ws, err := entity.NewWorkspace("T_ROLLBACK", "Rollback Test", []byte("01234567890123456789012345678901"))
+	if err != nil {
+		t.Fatalf("failed creating workspace entity: %v", err)
+	}
+	defer func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM workspaces WHERE id = $1", ws.ID().UUID())
+	}()
+
+	dup, err := entity.NewWorkspace("T_ROLLBACK", "Duplicate Team ID", []byte("01234567890123456789012345678901"))
+	if err != nil {
+		t.Fatalf("failed creating duplicate workspace entity: %v", err)
+	}
+
+	txErr := txMgr.WithinTransaction(ctx, func(txCtx context.Context) error {
+		if err := wsRepo.Create(txCtx, ws); err != nil {
+			return err
+		}
+		// Same slack_team_id: this must violate the unique constraint and force
+		// a rollback of the first Create in this same transaction.
+		return wsRepo.Create(txCtx, dup)
+	})
+	if txErr == nil {
+		t.Fatal("expected the transaction to fail on the duplicate team id")
+	}
+
+	if _, err := wsRepo.GetByID(ctx, ws.ID()); err == nil {
+		t.Error("CRITICAL: workspace from a rolled-back transaction is still readable")
+	}
 }
 
 func TestTenantIsolation_RepositoryQueries(t *testing.T) {
@@ -138,9 +214,26 @@ func TestTenantIsolation_RepositoryQueries(t *testing.T) {
 		}
 	}
 
-	// 4. Create Documents in both workspaces
-	pAlphaID := uuid.New()
-	pBetaID := uuid.New()
+	// 4. Create Documents in both workspaces. documents.persona_id is a foreign
+	// key, so each workspace needs a real persona row first.
+	personaRepo := postgres.NewPersonaRepository(pool)
+
+	personasAlpha, err := entity.DefaultPersonas(wsAlphaID)
+	if err != nil {
+		t.Fatalf("failed building Alpha personas: %v", err)
+	}
+	personasBeta, err := entity.DefaultPersonas(wsBetaID)
+	if err != nil {
+		t.Fatalf("failed building Beta personas: %v", err)
+	}
+	if err := personaRepo.Create(ctx, personasAlpha[0]); err != nil {
+		t.Fatalf("failed saving Alpha persona: %v", err)
+	}
+	if err := personaRepo.Create(ctx, personasBeta[0]); err != nil {
+		t.Fatalf("failed saving Beta persona: %v", err)
+	}
+	pAlphaID := personasAlpha[0].ID()
+	pBetaID := personasBeta[0].ID()
 
 	docAlpha, err := entity.NewDocument(wsAlphaID, pAlphaID, "Alpha Runbook", "# Database Runbook Alpha")
 	if err != nil {
@@ -215,5 +308,50 @@ func TestTenantIsolation_RepositoryQueries(t *testing.T) {
 		if res.Chunk.ID() == chunkBeta.ID() {
 			t.Error("CRITICAL DATA LEAKAGE: SearchHybrid in Alpha workspace returned Beta chunk")
 		}
+	}
+
+	// 6. Sandbox reproductions: these queries previously had no workspace_id
+	// predicate at all (WHERE id = $1 / WHERE incident_id = $1), so Alpha
+	// could read or update Beta's reproduction by guessing or observing its id.
+	sandboxRepo := postgres.NewSandboxReproductionRepository(pool)
+
+	srAlpha, err := entity.NewSandboxReproduction(incAlpha.ID(), wsAlphaID)
+	if err != nil {
+		t.Fatalf("failed creating srAlpha: %v", err)
+	}
+	srBeta, err := entity.NewSandboxReproduction(incBeta.ID(), wsBetaID)
+	if err != nil {
+		t.Fatalf("failed creating srBeta: %v", err)
+	}
+	if err := sandboxRepo.Create(ctx, srAlpha); err != nil {
+		t.Fatalf("failed saving srAlpha: %v", err)
+	}
+	if err := sandboxRepo.Create(ctx, srBeta); err != nil {
+		t.Fatalf("failed saving srBeta: %v", err)
+	}
+	defer func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM sandbox_reproductions WHERE id IN ($1, $2)", srAlpha.ID(), srBeta.ID())
+	}()
+
+	// Fetching Beta's reproduction by ID using Alpha's workspace ID MUST fail.
+	if _, err := sandboxRepo.GetByID(ctx, wsAlphaID, srBeta.ID()); err == nil {
+		t.Error("CRITICAL DATA LEAKAGE: Tenant Alpha retrieved Tenant Beta's sandbox reproduction by ID")
+	}
+
+	// Looking up Beta's incident's active reproduction scoped to Alpha MUST return nothing.
+	if active, err := sandboxRepo.GetActiveForIncident(ctx, wsAlphaID, incBeta.ID()); err != nil {
+		t.Fatalf("failed querying active reproduction: %v", err)
+	} else if active != nil {
+		t.Error("CRITICAL DATA LEAKAGE: GetActiveForIncident scoped to Alpha returned Beta's reproduction")
+	}
+
+	// Mutating Beta's row while stamped with Alpha's workspace id MUST NOT apply.
+	srBeta.MarkReady("container-beta")
+	tampered := entity.ReconstituteSandboxReproduction(
+		srBeta.ID(), srBeta.IncidentID(), wsAlphaID, srBeta.Status(),
+		srBeta.ScenarioID(), srBeta.ContainerRef(), srBeta.CreatedAt(), srBeta.ReadyAt(), srBeta.UpdatedAt(),
+	)
+	if err := sandboxRepo.Update(ctx, tampered); err == nil {
+		t.Error("CRITICAL DATA LEAKAGE: Update applied to Beta's row while stamped with Alpha's workspace id")
 	}
 }

@@ -1,0 +1,58 @@
+# Sandbox reproduction environment.
+#
+# Recreates the *conditions* of an incident in throwaway containers so a hypothesis
+# or a candidate fix can be tested without touching production. Each service is a
+# profile, selected by scripts/sandbox_reproduce.sh from the scenario being replayed.
+#
+# Nothing here shares a volume, port or network with the development stack.
+name: criaisis-sandbox
+
+services:
+  # Reproduces: db_connection_exhaustion.
+  # max_connections is deliberately tiny so a modest client pool saturates it in
+  # seconds, exactly as the fixture describes.
+  postgres-constrained:
+    profiles: ["db_connection_exhaustion"]
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: sandbox
+      POSTGRES_DB: sandbox
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=12"
+      - "-c"
+      - "idle_in_transaction_session_timeout=0"
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sandbox"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  # Reproduces: oom_crashloop.
+  # The memory ceiling and restart policy recreate the kernel OOM kill and the
+  # resulting CrashLoopBackOff, including the exit code 137 the runbook cites.
+  memory-capped-worker:
+    profiles: ["oom_crashloop"]
+    image: alpine:3.20
+    mem_limit: 64m
+    memswap_limit: 64m
+    restart: on-failure:5
+    command:
+      - "sh"
+      - "-c"
+      - "echo 'allocating past the cgroup limit'; exec tail /dev/zero"
+
+  # Reproduces: checkout_packet_loss.
+  # Requires NET_ADMIN to install the qdisc that drops packets on egress.
+  lossy-network:
+    profiles: ["checkout_packet_loss"]
+    image: alpine:3.20
+    cap_add: ["NET_ADMIN"]
+    command:
+      - "sh"
+      - "-c"
+      - "apk add --no-cache iproute2 >/dev/null && tc qdisc add dev eth0 root netem loss 80% delay 250ms && echo '80% loss, 250ms delay applied to eth0' && sleep infinity"

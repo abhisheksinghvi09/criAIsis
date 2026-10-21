@@ -2,6 +2,9 @@ package postgres
 
 import (
 	"context"
+	"fmt"
+
+	"criaisis/internal/domain/repository"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -41,4 +44,18 @@ func GetExecutor(ctx context.Context, pool *pgxpool.Pool) DBExecutor {
 		return nil
 	}
 	return pool
+}
+
+// conflictOrMissing explains an optimistic update that matched no row: either the
+// row is gone, or another writer bumped its version first (repository.ErrConflict).
+// table and where are constants supplied by repositories, never user input.
+func conflictOrMissing(ctx context.Context, exec DBExecutor, table, where string, args ...any) error {
+	var exists bool
+	if err := exec.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM "+table+" WHERE "+where+")", args...).Scan(&exists); err != nil {
+		return fmt.Errorf("checking %s after a failed update: %w", table, err)
+	}
+	if !exists {
+		return fmt.Errorf("%s row not found for update", table)
+	}
+	return repository.ErrConflict
 }

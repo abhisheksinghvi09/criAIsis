@@ -85,7 +85,11 @@ func Migrate(ctx context.Context, logger *zerolog.Logger, cfg *config.Config) er
 	if err != nil {
 		return err
 	}
-	defer migrator.Close()
+	defer func() {
+		if closeErr := migrator.Close(); closeErr != nil {
+			logger.Warn().Err(closeErr).Msg("failed closing migration source/connection")
+		}
+	}()
 
 	if err := migrator.Up(); err != nil {
 		return err

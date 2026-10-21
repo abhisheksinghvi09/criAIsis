@@ -47,7 +47,7 @@ criAIsis is a multi-tenant AI incident debate engine running inside Slack thread
 - [x] Task 7: Define repository interface contracts with workspace-scoped signatures (`internal/domain/repository`)
 
 ### Checkpoint: Domain Models
-- [x] 100% test coverage across all value objects and entity invariants (`go test -v ./internal/domain/...`)
+- [x] Value objects and entity invariants are unit tested (`go test -v ./internal/domain/...`); measured coverage is 72.3% (value) and 50.3% (entity), not the 100% this line previously claimed
 - [x] Domain layer has zero external framework or database driver dependencies (pure Go standard library + UUID)
 
 ### Phase 3: Repository Implementation & Multi-Tenant Integration Tests
@@ -62,10 +62,38 @@ criAIsis is a multi-tenant AI incident debate engine running inside Slack thread
 - [x] Vector similarity search query verifies persona and workspace scoping
 
 ### Phase 4: Local Incident Simulation & Sandbox Reproduction Framework
-- [ ] Task 12: Define scenario fixtures for common failure modes (`db_connection_exhaustion.json`, `checkout_packet_loss.json`)
-- [ ] Task 13: Implement `task incident:simulate` command stepping through Stage 1, Stage 2, and Stage 3 with diagnostic assertions
-- [ ] Task 14: Implement isolated dev/sandbox reproduction pipeline for replaying incident parameters in local test containers
+- [x] Task 12: Define scenario fixtures for common failure modes (`db_connection_exhaustion.json`, `checkout_packet_loss.json`, `oom_crashloop.json`)
+- [ ] Task 13: Implement `task incident:simulate` command stepping through Stage 1, Stage 2, and Stage 3 with diagnostic assertions — **not built**. No `cmd/simulate`, no Taskfile entry; the Phase 4 fixtures are consumed only by `scripts/sandbox_reproduce.sh` / `task sandbox:reproduce`, which replays a scenario in a throwaway container rather than driving the orchestrator directly.
+- [x] Task 14: Implement isolated dev/sandbox reproduction pipeline for replaying incident parameters in local test containers
 
 ### Phase 5: Observability Ingestion & Diagnostic Tool Adapters (MCP)
-- [ ] Task 15: Implement `IncidentContext` entity and `AlertHandler` for Grafana and AWS CloudWatch webhooks
-- [ ] Task 16: Define `DiagnosticTool` / MCP interface contract for scoped read-only telemetry probing in Stage 1
+- [x] Task 15: Implement `IncidentContext` entity and `AlertHandler` for Grafana and AWS CloudWatch webhooks
+- [ ] Task 16: Define `DiagnosticTool` / MCP interface contract for scoped read-only telemetry probing in Stage 1 — **built, then deleted**. A `telemetry.Registry` + `PrometheusTool` existed but were wired with zero registered tools and never read by the orchestrator (`o.tools` was a write-only field); removed as dead code rather than left half-wired. Re-add when a real probe is actually needed.
+
+### Phase 6: Runtime Assembly (enablers the earlier phases assumed)
+- [x] Task 17: `JobQueue` interface and in-process worker pool with backpressure (`internal/job`)
+- [x] Task 18: Server dependency container and graceful shutdown (`internal/server`)
+- [x] Task 19: LLM layer: Claude chat provider, OpenAI-compatible embeddings, offline fakes (`internal/infrastructure/llm`)
+- [x] Task 20: 2-Stage Clash orchestrator with structured outputs and citation filtering (`internal/service/orchestrator`)
+- [x] Task 21: Chunking and asynchronous ingestion service (`internal/service/ingest`)
+- [x] Task 22: Router, middleware chain and composition root (`cmd/criaisis`)
+
+### Checkpoint: Runnable Binary
+- [x] `go build ./...`, `go vet ./...` and `go test -race ./...` all pass
+- [x] Migration 000005 adds per-workspace webhook credentials (SHA-256 digest, constant-time verify)
+- [x] End-to-end simulation verified against a live pgvector database — Docker was confirmed available; migrations apply cleanly (`go run ./cmd/criaisis -migrate-only`), and `CRIAISIS_TEST_INTEGRATION=1 go test -race ./...` passes against it, including the cross-tenant isolation suite and a workspace-provisioning rollback test. This surfaced and fixed a real bug: the pgvector binary type was never registered on the connection pool, so `chunk_repo`'s `BatchCreate` (used by document ingestion) silently corrupted every embedding it wrote.
+
+### Phase 7: Security hardening, dead-code removal, and CI (this session)
+- [x] Closed three reachable SSRF paths: tenant-controlled embeddings `base_url` (reachable with only a workspace admin key — validated as an https-only, non-private-IP destination before any request), the Slack/Discord webhook host check (was a bare `strings.HasSuffix`, so `evilslack.com` passed as a Slack host), and unrestricted HTTP redirects on the Slack/Discord/SNS outbound clients
+- [x] Added the missing `workspace_id` predicate to `sandbox_reproduction_repo`'s three queries (the one repository without it) and extended the live-DB isolation suite to cover it
+- [x] Made workspace provisioning (workspace + settings + 4 default personas) atomic via `PostgresTxManager`, previously built but never called from anywhere; proven with a live-DB rollback test
+- [x] Deleted the Task 16 telemetry/diagnostic-tool subsystem (dead), the orphan `entity.User` aggregate (no repo, no handler, never referenced), and moved `orchestrator.NewStubChat` out of the production binary into a test file
+- [x] Added `.golangci.yml` (gosec, unconvert, unparam plus golangci-lint's default set) and fixed every finding — including a real crash (`job.MemoryQueue.Enqueue` could panic on a channel the concurrent `Shutdown` had just closed) and a real RCE-class dependency finding (`next@16.3.5` carried a critical CVE range; bumped to `16.3.8`)
+- [x] Stood up `.github/workflows/ci.yml`: build/vet/lint/govulncheck/unit tests with a coverage floor/integration tests against a pgvector service container (backend), a TruffleHog secret scan, and lint/typecheck/test/build (dashboard) — closing the "no CI exists" gap entirely
+- [x] Fixed the broken `web/` `npm run lint` (Next.js 16 removed `next lint`; added a standalone `eslint.config.mjs`)
+- [x] Added tests for the four packages that had none: `service/tenant` (0% → 83.7%), `infrastructure/slack` (0% → 91.5%), `service/incident` (0% → 76.7%), `server` (0% → 69.2%). Aggregate coverage: 42.5% → 47.7% — still well short of the org's 80% floor; CI's coverage gate is a 47% regression-guard ratchet, not a claim the mandate is met.
+
+### Not started
+- Slack app OAuth install, slash commands, and Block Kit rendering, and `@mention` routing, **are implemented** (`internal/handler/slack_inbound.go`, mounted in `internal/router/router.go`) — this line was stale.
+- Web dashboard: runbook management, persona prompt editor, and transcript viewer **are implemented** (`web/src/app/{runbooks,specialists,incidents}`) — this line was stale.
+- Genuinely remaining: the Slack OAuth callback has no `state` parameter (CSRF hardening — needs a new install-initiation endpoint to mint and later verify a nonce, not a one-line fix); SNS message `Signature`/`SigningCertURL` are never verified (lower priority — the alert-ingest endpoint is already gated by a per-workspace secret token before any SNS parsing happens); `task incident:simulate` (Task 13, above); raising aggregate test coverage toward the org's 80% floor.

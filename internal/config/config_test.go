@@ -23,14 +23,10 @@ func validEnviron() []string {
 		"CRIAISIS_DATABASE_MAX_IDLE_CONNS=10",
 		"CRIAISIS_DATABASE_CONN_MAX_LIFETIME=300",
 		"CRIAISIS_DATABASE_CONN_MAX_IDLE_TIME=120",
-		"CRIAISIS_SLACK_CLIENT_ID=123.456",
-		"CRIAISIS_SLACK_CLIENT_SECRET=secret123",
-		"CRIAISIS_SLACK_SIGNING_SECRET=signing123",
-		"CRIAISIS_SLACK_BOT_TOKEN_ENCRYPTION_KEY=01234567890123456789012345678901",
-		"CRIAISIS_LLM_PROVIDER=openai",
-		"CRIAISIS_LLM_API_KEY=sk-test123",
-		"CRIAISIS_LLM_SPECIALIST_MODEL=gpt-4o-mini",
-		"CRIAISIS_LLM_SYNTHESIS_MODEL=gpt-4o",
+		"CRIAISIS_SECURITY_CREDENTIAL_ENCRYPTION_KEY=01234567890123456789012345678901",
+		"CRIAISIS_SECURITY_ADMIN_API_KEY=platform-admin-key-long-enough",
+		"CRIAISIS_LLM_SPECIALIST_MODEL=claude-opus-5",
+		"CRIAISIS_LLM_SYNTHESIS_MODEL=claude-opus-5",
 		"CRIAISIS_LLM_EMBEDDING_MODEL=text-embedding-3-small",
 	}
 }
@@ -56,8 +52,12 @@ func TestLoadConfigFromEnviron_Valid(t *testing.T) {
 	if cfg.Database.Port != 5432 {
 		t.Errorf("expected port 5432, got %d", cfg.Database.Port)
 	}
-	if cfg.LLM.SpecialistModel != "gpt-4o-mini" {
-		t.Errorf("expected specialist model 'gpt-4o-mini', got '%s'", cfg.LLM.SpecialistModel)
+	if cfg.LLM.SpecialistModel != "claude-opus-5" {
+		t.Errorf("expected specialist model 'claude-opus-5', got '%s'", cfg.LLM.SpecialistModel)
+	}
+	// embedding_base_url is not in the environ: it must come from defaults
+	if cfg.LLM.EmbeddingBaseURL != "https://api.openai.com/v1" {
+		t.Errorf("expected default embedding base url, got '%s'", cfg.LLM.EmbeddingBaseURL)
 	}
 
 	expectedDSN := "postgres://postgres:abhi101@localhost:5432/criaisis?sslmode=disable"
@@ -79,18 +79,94 @@ func TestLoadConfigFromEnviron_MissingRequiredField(t *testing.T) {
 	}
 }
 
+// The encryption key protects every tenant credential at rest, so a wrong length
+// must abort at boot rather than later.
 func TestLoadConfigFromEnviron_InvalidEncryptionKeyLength(t *testing.T) {
 	env := validEnviron()
-	// Replace key with a 13-character string instead of 32
 	for i, v := range env {
-		if strings.HasPrefix(v, "CRIAISIS_SLACK_BOT_TOKEN_ENCRYPTION_KEY=") {
-			env[i] = "CRIAISIS_SLACK_BOT_TOKEN_ENCRYPTION_KEY=too-short-key"
+		if strings.HasPrefix(v, "CRIAISIS_SECURITY_CREDENTIAL_ENCRYPTION_KEY=") {
+			env[i] = "CRIAISIS_SECURITY_CREDENTIAL_ENCRYPTION_KEY=too-short-key"
 		}
 	}
 
-	_, err := LoadConfigFromEnviron(env)
-	if err == nil {
-		t.Fatal("expected error for 13-char encryption key, got nil")
+	if _, err := LoadConfigFromEnviron(env); err == nil {
+		t.Fatal("expected error for a 13-character encryption key, got nil")
+	}
+}
+
+// The struct tag's len=32 counts runes; AES-256 (and crypto.New) counts bytes.
+// A key built from 32 multi-byte runes is exactly 32 runes but far more than
+// 32 bytes, so it must still be rejected here rather than passing validation
+// and failing later at cipher construction with a worse error.
+func TestLoadConfigFromEnviron_RejectsMultibyteEncryptionKeyOfRightRuneCount(t *testing.T) {
+	env := validEnviron()
+	multibyteKey := strings.Repeat("é", 32) // 32 runes, 64 bytes (é is 2 bytes in UTF-8)
+	for i, v := range env {
+		if strings.HasPrefix(v, "CRIAISIS_SECURITY_CREDENTIAL_ENCRYPTION_KEY=") {
+			env[i] = "CRIAISIS_SECURITY_CREDENTIAL_ENCRYPTION_KEY=" + multibyteKey
+		}
+	}
+
+	if _, err := LoadConfigFromEnviron(env); err == nil {
+		t.Fatal("expected a 32-rune/64-byte key to be rejected, got nil")
+	}
+}
+
+// database.ssl_mode defaults to "disable" for local dev; that default must never
+// reach a production deploy, where it would mean every decrypted tenant
+// credential travels to Postgres in plaintext.
+func TestLoadConfigFromEnviron_RejectsDisabledSSLInProduction(t *testing.T) {
+	env := validEnviron()
+	for i, v := range env {
+		switch {
+		case strings.HasPrefix(v, "CRIAISIS_PRIMARY_ENV="):
+			env[i] = "CRIAISIS_PRIMARY_ENV=production"
+		case strings.HasPrefix(v, "CRIAISIS_DATABASE_SSL_MODE="):
+			env[i] = "CRIAISIS_DATABASE_SSL_MODE=disable"
+		}
+	}
+
+	if _, err := LoadConfigFromEnviron(env); err == nil {
+		t.Fatal("expected ssl_mode=disable to be rejected when env=production")
+	}
+}
+
+func TestLoadConfigFromEnviron_AllowsDisabledSSLOutsideProduction(t *testing.T) {
+	env := validEnviron() // primary.env=local, ssl_mode=disable, already set
+	if _, err := LoadConfigFromEnviron(env); err != nil {
+		t.Fatalf("expected ssl_mode=disable to be fine outside production, got: %v", err)
+	}
+}
+
+// criAIsis is bring-your-own-key: there must be no platform-wide model credential
+// in configuration for a tenant to accidentally ride on.
+func TestConfig_CarriesNoPlatformModelKey(t *testing.T) {
+	cfg, err := LoadConfigFromEnviron(validEnviron())
+	if err != nil {
+		t.Fatalf("expected valid config, got: %v", err)
+	}
+
+	// LLMConfig should expose model defaults only. If a key field is ever added
+	// back, this test is the place that should stop it.
+	if cfg.LLM.SpecialistModel == "" || cfg.LLM.EmbeddingBaseURL == "" {
+		t.Error("expected model defaults to be present")
+	}
+	if cfg.Security.AdminAPIKey == "" {
+		t.Error("expected a platform admin key for workspace creation")
+	}
+}
+
+// A short platform admin key is guessable and gates workspace creation.
+func TestLoadConfigFromEnviron_RejectsWeakAdminKey(t *testing.T) {
+	env := validEnviron()
+	for i, v := range env {
+		if strings.HasPrefix(v, "CRIAISIS_SECURITY_ADMIN_API_KEY=") {
+			env[i] = "CRIAISIS_SECURITY_ADMIN_API_KEY=short"
+		}
+	}
+
+	if _, err := LoadConfigFromEnviron(env); err == nil {
+		t.Fatal("expected a short admin key to be rejected")
 	}
 }
 
@@ -108,5 +184,62 @@ func TestDatabaseConfig_DSN(t *testing.T) {
 	expected := "postgres://app_user:p%40ss%3Aw%2Ford@db.example.com:5432/criaisis_prod?sslmode=require"
 	if dsn != expected {
 		t.Errorf("expected DSN '%s', got '%s'", expected, dsn)
+	}
+}
+
+// A password containing a space must round-trip to a real space, not "+":
+// url.QueryEscape (query-string rules) would encode it as "+", a literal
+// character in a URL's userinfo component - so the stored password and the
+// password the driver actually sends would silently differ.
+func TestDatabaseConfig_DSN_PasswordWithSpace(t *testing.T) {
+	db := DatabaseConfig{
+		Host: "db.example.com", Port: 5432, User: "app_user",
+		Password: "pass with space", Name: "criaisis_prod", SSLMode: "require",
+	}
+
+	dsn := db.DSN()
+	expected := "postgres://app_user:pass%20with%20space@db.example.com:5432/criaisis_prod?sslmode=require" // trufflehog:ignore (fake fixture)
+	if dsn != expected {
+		t.Errorf("expected DSN '%s', got '%s'", expected, dsn)
+	}
+}
+
+func TestLoadConfigFromEnviron_RejectsPlaceholderSecretsInProduction(t *testing.T) {
+	for _, tc := range []struct{ name, key, val string }{
+		{"encryption key", "CRIAISIS_SECURITY_CREDENTIAL_ENCRYPTION_KEY=", "change-me-to-32-characters-now!!"},
+		{"admin key", "CRIAISIS_SECURITY_ADMIN_API_KEY=", "change-me-to-a-long-random-string"},
+	} {
+		env := validEnviron()
+		for i, v := range env {
+			switch {
+			case strings.HasPrefix(v, "CRIAISIS_PRIMARY_ENV="):
+				env[i] = "CRIAISIS_PRIMARY_ENV=production"
+			case strings.HasPrefix(v, "CRIAISIS_DATABASE_SSL_MODE="):
+				env[i] = "CRIAISIS_DATABASE_SSL_MODE=require"
+			case strings.HasPrefix(v, tc.key):
+				env[i] = tc.key + tc.val
+			}
+		}
+		if _, err := LoadConfigFromEnviron(env); err == nil {
+			t.Errorf("%s: placeholder accepted in production", tc.name)
+		}
+	}
+}
+
+func TestFeatures_SandboxIsOffUnlessEnabled(t *testing.T) {
+	cfg, err := LoadConfigFromEnviron(validEnviron())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Features.Sandbox {
+		t.Error("sandbox must default to off")
+	}
+
+	cfg, err = LoadConfigFromEnviron(append(validEnviron(), "CRIAISIS_FEATURES_SANDBOX=true"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Features.Sandbox {
+		t.Error("CRIAISIS_FEATURES_SANDBOX=true did not enable the sandbox")
 	}
 }

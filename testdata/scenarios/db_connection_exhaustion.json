@@ -1,0 +1,49 @@
+{
+  "id": "scenario-db-conn-exhaustion",
+  "title": "PostgreSQL Max Connections Exhausted on Checkout Service",
+  "description": "API gateway reporting HTTP 500 spike and 504 Gateway Timeouts across /api/v1/checkout. Core database rejecting connections with 'FATAL: remaining connection slots are reserved for non-replication superuser connections'.",
+  "severity": "sev-1",
+  "trigger_type": "webhook",
+  "context": {
+    "failing_service": "checkout-api",
+    "error_logs": [
+      "2026-09-17T00:10:15Z [FATAL] remaining connection slots are reserved for non-replication superuser connections",
+      "2026-09-17T00:10:18Z [checkout-api] pgx: failed to acquire connection from pool: timeout after 5000ms",
+      "2026-09-17T00:10:22Z [checkout-api] HTTP 504 POST /api/v1/checkout duration=5003ms caller=mobile-app"
+    ],
+    "stack_traces": [
+      "github.com/jackc/pgx/v5/pgxpool.(*Pool).Acquire\n\t/go/pkg/mod/github.com/jackc/pgx/v5@v5.5.4/pgxpool/pool.go:240\ngithub.com/shop/checkout/internal/repository.(*OrderRepo).CreateOrderWithInventoryLock\n\t/app/internal/repository/order.go:88\ngithub.com/shop/checkout/internal/handler.HandleCheckout\n\t/app/internal/handler/checkout.go:45"
+    ],
+    "metrics": {
+      "db_active_connections": 200,
+      "db_max_connections": 200,
+      "db_idle_in_transaction_count": 142,
+      "checkout_p99_latency_ms": 5200,
+      "http_5xx_rate_percent": 68.5
+    }
+  },
+  "runbooks": {
+    "database": {
+      "title": "PostgreSQL Connection Saturation and Lock Contention",
+      "raw_content": "# PostgreSQL Connection Saturation Runbook\n\n## Symptoms\n- FATAL: remaining connection slots are reserved for non-replication superuser connections\n- High number of idle in transaction sessions\n\n## Diagnostic Queries\nTo inspect active and hung connections:\n```sql\nSELECT pid, usename, client_addr, state, age(clock_timestamp(), query_start) AS duration, query\nFROM pg_stat_activity\nWHERE state != 'idle'\nORDER BY duration DESC LIMIT 20;\n```\n\nTo identify long-running idle in transaction queries blocking connections:\n```sql\nSELECT pid, state, age(clock_timestamp(), state_change) AS idle_duration, query\nFROM pg_stat_activity\nWHERE state = 'idle in transaction'\nORDER BY idle_duration DESC;\n```\n\n## Resolution\nIf transactions are leaking due to missing commit/rollback in application code, terminate hung connections:\n```sql\nSELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE state = 'idle in transaction' AND age(clock_timestamp(), state_change) > interval '2 minutes';\n```"
+    },
+    "application": {
+      "title": "Checkout Service Connection Pool and Transaction Management",
+      "raw_content": "# Checkout Service Runbook\n\n## Known Regressions\nIn commit d74a12b, `CreateOrderWithInventoryLock` introduced an external payment gateway call inside an uncommitted database transaction. If the payment gateway latency increases, database connections remain open in `idle in transaction` state until the HTTP client times out.\n\n## Diagnostic Steps\n1. Inspect active goroutines on `/debug/pprof/goroutine`\n2. Check connection pool metrics: `checkout_pool_in_use_connections`\n\n## Remediation\n1. Revert commit d74a12b or apply patch moving external HTTP calls outside DB transaction blocks.\n2. Set `ConnMaxLifetime` and `idle_in_transaction_session_timeout = '30s'`."
+    },
+    "network": {
+      "title": "VPC Peering and Database Ingress Latency",
+      "raw_content": "# Network Diagnostics Runbook\n\n## Routing Checks\nVerify latency between checkout ECS cluster and RDS subnet group:\n```bash\ntraceroute -T -p 5432 rds-postgres.internal\n```\nIf TCP connection handshake SYN-ACK latency is under 1.2ms, the network layer is healthy and connection rejection is at the database server socket layer."
+    },
+    "security": {
+      "title": "DDoS and Credential Brute Force Detection",
+      "raw_content": "# Security Runbook: Connection Flood Analysis\n\n## Verification\nCheck if sudden connection spike is caused by unauthorized external IP flood or internal service scaling.\n```sql\nSELECT client_addr, count(*) FROM pg_stat_activity GROUP BY client_addr ORDER BY count(*) DESC;\n```\nIf all connection addresses originate from trusted ECS subnets (10.0.12.0/24), rule out external brute force attack."
+    }
+  },
+  "expected_classification": "code_level",
+  "expected_owner": "application",
+  "expected_diagnostic_queries": [
+    "SELECT pid, state, age(clock_timestamp(), state_change) AS idle_duration, query FROM pg_stat_activity WHERE state = 'idle in transaction' ORDER BY idle_duration DESC;",
+    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE state = 'idle in transaction' AND age(clock_timestamp(), state_change) > interval '2 minutes';"
+  ]
+}

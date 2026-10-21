@@ -14,10 +14,15 @@ import (
 
 var (
 	ErrIncidentAlreadyResolved = errors.New("incident is already resolved")
+	// ErrNotInvestigating means only an investigating incident can be failed.
+	ErrNotInvestigating = errors.New("incident is no longer investigating")
 )
 
 // Incident serves as the aggregate root for a multi-agent debate session anchored to a Slack thread.
 type Incident struct {
+	// version is the persisted row version for optimistic concurrency.
+	version int64
+
 	id                 uuid.UUID
 	workspaceID        value.WorkspaceID
 	title              string
@@ -145,6 +150,41 @@ func (i *Incident) UpdateSeverity(severity value.Severity) error {
 	return nil
 }
 
+// MoveToSlackThread points the incident at the Slack channel and thread that now
+// host it, when the war room is created after the incident was opened.
+func (i *Incident) MoveToSlackThread(channel value.SlackChannelID, thread value.SlackThreadTS) error {
+	if channel == "" || thread == "" {
+		return errors.New("slack channel and thread are required")
+	}
+	i.slackChannelID, i.slackThreadTS = channel, thread
+	return i.setMetadataField("war_room", true)
+}
+
+// HasWarRoom reports whether the incident already lives in its own Slack channel,
+// so a retried job reuses that room instead of opening a second one.
+func (i *Incident) HasWarRoom() bool {
+	var meta struct {
+		WarRoom bool `json:"war_room"`
+	}
+	return len(i.metadata) > 0 && json.Unmarshal(i.metadata, &meta) == nil && meta.WarRoom
+}
+
+// setMetadataField writes one key into the metadata document.
+func (i *Incident) setMetadataField(key string, v any) error {
+	meta := make(map[string]any)
+	if len(i.metadata) > 0 {
+		_ = json.Unmarshal(i.metadata, &meta)
+	}
+	meta[key] = v
+	raw, err := json.Marshal(meta)
+	if err != nil {
+		return err
+	}
+	i.metadata = raw
+	i.updatedAt = time.Now().UTC()
+	return nil
+}
+
 // Resolve formally transitions the incident to resolved, locking the resolution timestamp.
 // If already resolved, it returns ErrIncidentAlreadyResolved to protect lifecycle invariants.
 func (i *Incident) Resolve(resolvedAt time.Time) error {
@@ -154,6 +194,17 @@ func (i *Incident) Resolve(resolvedAt time.Time) error {
 	i.status = value.IncidentStatusResolved
 	i.resolvedAt = &resolvedAt
 	i.updatedAt = resolvedAt
+	return nil
+}
+
+// Fail marks an investigation that could not complete. Only an investigating
+// incident can fail; a resolved one keeps its outcome.
+func (i *Incident) Fail(at time.Time) error {
+	if i.status != value.IncidentStatusInvestigating {
+		return fmt.Errorf("%w: it is %s", ErrNotInvestigating, i.status)
+	}
+	i.status = value.IncidentStatusFailed
+	i.updatedAt = at
 	return nil
 }
 
@@ -217,4 +268,13 @@ func (i *Incident) SetIncidentContext(ctx value.IncidentContext) error {
 	i.metadata = bytes
 	i.updatedAt = time.Now().UTC()
 	return nil
+}
+
+// Version is the row version this copy was loaded at (persistence detail).
+func (i *Incident) Version() int64 { return i.version }
+
+// WithVersion records the row version; only repositories call it.
+func (i *Incident) WithVersion(v int64) *Incident {
+	i.version = v
+	return i
 }

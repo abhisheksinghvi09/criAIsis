@@ -23,14 +23,19 @@ type DatabaseConfig struct {
 }
 
 // DSN formats a standard, URL-safe PostgreSQL connection string.
-// Passwords with special characters (e.g. '@', ':', '/') are safely escaped to prevent connection parse failures.
+// Passwords with special characters (e.g. '@', ':', '/', a literal space) are
+// safely escaped using the URL userinfo encoding rules to prevent connection
+// parse failures or, worse, a silently wrong password.
 func (d DatabaseConfig) DSN() string {
 	hostPort := net.JoinHostPort(d.Host, strconv.Itoa(d.Port))
-	encodedPassword := url.QueryEscape(d.Password)
+	// url.QueryEscape encodes a space as "+", which is a literal character (not
+	// a space) in a URL's userinfo component: a password containing a space
+	// would authenticate with the wrong string instead of failing loudly.
+	// url.UserPassword applies the correct userinfo percent-encoding instead.
+	userinfo := url.UserPassword(d.User, d.Password)
 
-	return fmt.Sprintf("postgres://%s:%s@%s/%s?sslmode=%s",
-		d.User,
-		encodedPassword,
+	return fmt.Sprintf("postgres://%s@%s/%s?sslmode=%s",
+		userinfo,
 		hostPort,
 		d.Name,
 		d.SSLMode,

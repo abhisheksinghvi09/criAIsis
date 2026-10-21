@@ -20,14 +20,24 @@ type DocumentRepository interface {
 	// GetByContentHash checks whether an identical document content hash already exists for deduplication.
 	GetByContentHash(ctx context.Context, wsID value.WorkspaceID, hash string) (*entity.Document, error)
 
-	// ListByPersona retrieves all runbooks assigned to a specific specialist persona.
-	ListByPersona(ctx context.Context, wsID value.WorkspaceID, personaID uuid.UUID) ([]*entity.Document, error)
+	// ListSummaries lists every runbook in a workspace without its content: one
+	// query for the coverage view, however many specialists there are.
+	ListSummaries(ctx context.Context, wsID value.WorkspaceID) ([]DocumentSummary, error)
 
 	// UpdateStatus updates the asynchronous ingestion lifecycle state and chunk count.
 	UpdateStatus(ctx context.Context, wsID value.WorkspaceID, id uuid.UUID, status value.DocumentStatus, chunkCount int) error
 
 	// Delete removes a runbook and cascades deletion to all associated chunks.
 	Delete(ctx context.Context, wsID value.WorkspaceID, id uuid.UUID) error
+}
+
+// DocumentSummary is a runbook's metadata, without its (possibly large) content.
+type DocumentSummary struct {
+	ID         uuid.UUID
+	PersonaID  uuid.UUID
+	Title      string
+	Status     string
+	ChunkCount int
 }
 
 // SearchResult bundles a matched document chunk with its hybrid rank score and parent document title.

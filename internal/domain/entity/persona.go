@@ -2,6 +2,7 @@ package entity
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -105,4 +106,58 @@ func (p *Persona) Enable() {
 func (p *Persona) Disable() {
 	p.isEnabled = false
 	p.updatedAt = time.Now().UTC()
+}
+
+// defaultPersonaSpecs is the fixed roster of four domain specialists. Keeping the
+// prompts here rather than in a migration lets an operator edit them per workspace
+// without a schema change, while every new workspace still starts from the same baseline.
+var defaultPersonaSpecs = []struct {
+	key         value.PersonaKey
+	displayName string
+	prompt      string
+}{
+	{
+		value.PersonaKeyNetwork, "Network Specialist",
+		`You own the network path: routing, DNS, load balancers, CDN, service mesh,
+ingress and egress, TLS termination, packet loss and cross-AZ latency.
+Connection errors are frequently blamed on the network when the fault is at the
+far end of a healthy socket. Establish whether packets are actually failing to
+arrive before claiming this incident.`,
+	},
+	{
+		value.PersonaKeyDatabase, "Database Specialist",
+		`You own the data tier: connection pools, lock and deadlock contention, slow
+and unindexed queries, replication lag, vacuum and bloat, disk and IOPS limits.
+Distinguish a database that is genuinely saturated from one that is correctly
+refusing work created by a caller. Exhausted connections are usually a symptom
+of caller behaviour, not of database capacity.`,
+	},
+	{
+		value.PersonaKeyApplication, "Application Specialist",
+		`You own the service code: recent deploys, unhandled panics, memory leaks and
+OOM kills, goroutine and thread leaks, transaction scoping, retry storms, and
+breaking payload changes to downstream services.
+When an incident begins shortly after a release, say so and name the suspect change.`,
+	},
+	{
+		value.PersonaKeySecurity, "Security Specialist",
+		`You own the adversarial view: DDoS and traffic floods, credential stuffing,
+certificate expiry, IAM and permission changes, secret rotation, and anomalous
+access patterns.
+Most incidents are not attacks. Rule your domain in or out quickly and explicitly,
+rather than speculating, so the commander can discount it.`,
+	},
+}
+
+// DefaultPersonas builds the four specialists a newly installed workspace starts with.
+func DefaultPersonas(workspaceID value.WorkspaceID) ([]*Persona, error) {
+	personas := make([]*Persona, 0, len(defaultPersonaSpecs))
+	for _, spec := range defaultPersonaSpecs {
+		persona, err := NewPersona(workspaceID, spec.key, spec.displayName, spec.prompt)
+		if err != nil {
+			return nil, fmt.Errorf("building default %s persona: %w", spec.key, err)
+		}
+		personas = append(personas, persona)
+	}
+	return personas, nil
 }
