@@ -56,7 +56,8 @@ func (h *RunbookHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req runbookRequest
-	if !decodeJSON(w, r, &req) {
+	// Headroom over the content cap covers JSON escaping and the other fields.
+	if !decodeJSONLimit(w, r, &req, maxRunbookBytes+(64<<10)) {
 		return
 	}
 

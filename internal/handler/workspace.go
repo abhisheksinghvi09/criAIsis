@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -414,10 +415,21 @@ func (h *WorkspaceHandler) fail(w http.ResponseWriter, action string, err error)
 	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("could not complete: %s", action)})
 }
 
-// decodeJSON reads a bounded JSON body, reporting malformed input to the caller.
+// decodeJSON reads a JSON body capped at maxBodyBytes.
 func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
+	return decodeJSONLimit(w, r, target, maxBodyBytes)
+}
+
+// decodeJSONLimit reads a JSON body capped at limit bytes. An oversize body is a
+// 413, not a truncated parse that surfaces as "not valid json".
+func decodeJSONLimit(w http.ResponseWriter, r *http.Request, target any, limit int64) bool {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": fmt.Sprintf("request body exceeds %d bytes", limit)})
+			return false
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "could not read request body"})
 		return false
 	}
