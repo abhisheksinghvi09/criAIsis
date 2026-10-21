@@ -198,7 +198,7 @@ func TestDatabaseConfig_DSN_PasswordWithSpace(t *testing.T) {
 	}
 
 	dsn := db.DSN()
-	expected := "postgres://app_user:pass%20with%20space@db.example.com:5432/criaisis_prod?sslmode=require"
+	expected := "postgres://app_user:pass%20with%20space@db.example.com:5432/criaisis_prod?sslmode=require" // trufflehog:ignore (fake fixture)
 	if dsn != expected {
 		t.Errorf("expected DSN '%s', got '%s'", expected, dsn)
 	}

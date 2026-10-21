@@ -63,28 +63,29 @@ jobs:
           version: v2.15.0
 
       - name: Vulnerability scan (govulncheck)
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
-      - name: Unit tests (race, coverage)
-        run: go test -race -coverprofile=coverage.out ./...
+      - name: Unit tests (race)
+        run: go test -race ./...
+
+      - name: Migrate database for integration tests
+        run: go run ./cmd/criaisis -migrate-only
+
+      # Coverage is measured here, with the live database: the queue, key rotation
+      # and retrieval code can only be exercised against real Postgres.
+      - name: Integration tests (live pgvector, race, coverage)
+        run: CRIAISIS_TEST_INTEGRATION=1 go test -race -coverprofile=coverage.out ./...
 
       - name: Enforce coverage floor
         run: |
           total=$(go tool cover -func=coverage.out | tail -1 | grep -oE '[0-9]+\.[0-9]+')
           echo "Total coverage: ${total}%"
-          # ponytail: this is a ratchet at the measured starting point (47.7% at
-          # introduction), not the org's mandated 80% floor - raise it as more
-          # packages gain tests, rather than letting coverage silently regress
-          # below where it already stands. See project.md's Mandated section.
-          floor=47.0
+          # ponytail: a ratchet just under the measured level (55.3% with the
+          # integration suite), not the org's mandated 80% floor. Raise it as
+          # coverage grows rather than letting it silently regress.
+          floor=54.0
           awk -v t="$total" -v f="$floor" 'BEGIN { exit !(t >= f) }' \
             || { echo "coverage ${total}% is below the ${floor}% floor"; exit 1; }
-
-      - name: Migrate database for integration tests
-        run: go run ./cmd/criaisis -migrate-only
-
-      - name: Integration tests (live pgvector)
-        run: CRIAISIS_TEST_INTEGRATION=1 go test -race ./...
 
   secrets-scan:
     name: Secret scan (TruffleHog)
@@ -95,7 +96,10 @@ jobs:
           fetch-depth: 0
       - uses: trufflesecurity/trufflehog@e63326d6545de8f425d93ce24078c6e68d83f70e # v3.99.3
         with:
-          extra_args: --results=verified,unknown
+          # Unknown (unverifiable) results still fail the build. The one exclusion is
+          # a DSN-encoding test whose fixture credential points at db.example.com;
+          # it is listed by exact path in .github/trufflehog-exclude.txt.
+          extra_args: --results=verified,unknown --exclude-paths=.github/trufflehog-exclude.txt
 
   web:
     name: Dashboard (Next.js)
