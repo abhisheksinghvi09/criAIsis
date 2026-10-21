@@ -386,29 +386,6 @@ func TestHandleJob_UnconfiguredWorkspaceIsSkippedNotRetried(t *testing.T) {
 	}
 }
 
-func TestInvestigateNow_ReturnsASummaryWithoutTouchingTheQueue(t *testing.T) {
-	queue := &mockQueue{}
-	svc, wsID := newTestService(t, queue, jsonChat())
-	inc := newTestIncident(t, wsID)
-
-	summary, err := svc.InvestigateNow(context.Background(), inc)
-	if err != nil {
-		t.Fatalf("InvestigateNow: %v", err)
-	}
-	if summary.Specialists != 1 {
-		t.Errorf("expected 1 specialist to have succeeded, got %d", summary.Specialists)
-	}
-	if summary.Classification != "hybrid" || summary.OwningDomain != "database" {
-		t.Errorf("unexpected summary: %+v", summary)
-	}
-
-	queue.mu.Lock()
-	defer queue.mu.Unlock()
-	if len(queue.jobs) != 0 {
-		t.Error("InvestigateNow must bypass the queue entirely")
-	}
-}
-
 func TestResolve_RejectsADoubleResolve(t *testing.T) {
 	svc, wsID := newTestService(t, &mockQueue{}, jsonChat())
 	opened, err := svc.Open(context.Background(), incident.NewIncidentInput{

@@ -8,7 +8,10 @@ import { Card, Check, Empty, SeverityBadge, Stat, formatTime } from "@/component
 import { api } from "@/lib/api";
 import { useCredentials } from "@/lib/session";
 import { useResource } from "@/lib/useApi";
-import type { IncidentSummary, TestInvestigationResult, WorkspaceSettings } from "@/lib/types";
+import type { IncidentDetail, IncidentSummary, WorkspaceSettings } from "@/lib/types";
+
+const SETUP_CHECK_POLL_MS = 2000;
+const SETUP_CHECK_MAX_POLLS = 90;
 
 export default function OverviewPage() {
   return (
@@ -24,16 +27,29 @@ function Overview() {
   const incidents = useResource<{ incidents: IncidentSummary[] | null }>(api.incidents);
 
   const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<TestInvestigationResult | null>(null);
+  const [result, setResult] = useState<IncidentDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // The check is queued server-side, so poll the incident until its synthesis
+  // turn lands (done) or it is marked failed.
   async function runCheck() {
     setRunning(true);
     setError(null);
     setResult(null);
     try {
-      setResult(await api.testInvestigation(creds));
+      const { incident_id } = await api.testInvestigation(creds);
       incidents.reload();
+      for (let i = 0; i < SETUP_CHECK_MAX_POLLS; i++) {
+        await new Promise((resolve) => setTimeout(resolve, SETUP_CHECK_POLL_MS));
+        const inc = await api.incident(creds, incident_id);
+        if (inc.status === "failed") throw new Error("The investigation failed. Check the model key, embedding key and server logs.");
+        if (inc.transcript.some((t) => t.turn_type === "synthesis")) {
+          setResult(inc);
+          incidents.reload();
+          return;
+        }
+      }
+      throw new Error("The investigation is taking longer than expected. Open the incident to follow it.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "The setup check failed");
     } finally {
@@ -62,9 +78,10 @@ function Overview() {
 
       {result ? (
         <div className="notice ok">
-          Investigation complete in {result.elapsed}. {result.specialists} specialists reported;
-          root cause classified as {result.classification}, owned by {result.owning_domain}.
-          The full transcript was posted to your channel.
+          Investigation complete. {result.transcript.filter((t) => t.turn_type === "specialist_hypothesis").length} specialists
+          reported; root cause classified as{" "}
+          {result.transcript.find((t) => t.turn_type === "synthesis")?.metadata.classification ?? "unknown"}.{" "}
+          <Link href={`/incidents/${result.id}`}>Open the transcript</Link>; it was also posted to your channel.
         </div>
       ) : null}
 

@@ -100,14 +100,10 @@ export interface IncidentDetail extends IncidentSummary {
   transcript: DebateTurn[];
 }
 
+/** The setup check is queued; the verdict arrives on the incident transcript. */
 export interface TestInvestigationResult {
   status: string;
   incident_id: string;
-  specialists: number;
-  classification: Classification;
-  owning_domain: PersonaKey;
-  elapsed: string;
-  runbooks_cited: string[] | null;
   note: string;
 }
 

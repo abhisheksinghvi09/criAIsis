@@ -185,50 +185,6 @@ func (s *Service) deliver(ctx context.Context, runtime *tenant.Runtime, inc *ent
 	return nil
 }
 
-// InvestigateNow runs an investigation synchronously and returns a summary.
-//
-// The queue is bypassed on purpose: this serves the setup check, where the
-// customer is waiting on the response and needs the failure reason, not a job id.
-func (s *Service) InvestigateNow(ctx context.Context, inc *entity.Incident) (*Summary, error) {
-	if err := s.incidents.Create(ctx, inc); err != nil {
-		return nil, fmt.Errorf("persisting incident: %w", err)
-	}
-
-	runtime, err := s.resolver.Resolve(ctx, inc.WorkspaceID())
-	if err != nil {
-		return nil, err
-	}
-
-	started := time.Now()
-	result, err := s.build(runtime).RunClash(ctx, inc)
-	if err != nil {
-		return nil, fmt.Errorf("running investigation: %w", err)
-	}
-	elapsed := time.Since(started)
-
-	report := buildReport(inc, result, elapsed)
-	if err := runtime.Notifier.Notify(ctx, report); err != nil {
-		return nil, fmt.Errorf("the investigation ran but delivery failed: %w", err)
-	}
-
-	return &Summary{
-		Specialists:    result.SucceededCount(),
-		Classification: result.Synthesis.Classification,
-		OwningDomain:   result.Synthesis.OwningDomain,
-		Citations:      report.Citations,
-		Elapsed:        elapsed.Round(100 * time.Millisecond).String(),
-	}, nil
-}
-
-// Summary is the caller-facing outcome of a synchronous investigation.
-type Summary struct {
-	Specialists    int
-	Classification string
-	OwningDomain   string
-	Citations      []string
-	Elapsed        string
-}
-
 // Resolve closes an incident and locks its transcript.
 func (s *Service) Resolve(ctx context.Context, wsID value.WorkspaceID, id uuid.UUID) (*entity.Incident, error) {
 	inc, err := s.incidents.GetByID(ctx, wsID, id)

@@ -120,9 +120,11 @@ unchanged content is skipped by content hash.
 curl -X POST $BASE/test-investigation -H "Authorization: Bearer $ADMIN"
 ```
 
-This runs a **real** investigation on a representative incident using their keys
-and their runbooks, and posts the result to their channel. It exercises the whole
-chain before any real outage. `POST $BASE/notifications/test` checks delivery alone.
+This queues a **real** investigation on a representative incident using their keys
+and their runbooks, and returns `202` with an `incident_id`. Poll
+`GET $BASE/incidents/{incident_id}` until a `synthesis` turn appears (or the status
+becomes `failed`); the result is also posted to their channel. It exercises the
+whole chain before any real outage. `POST $BASE/notifications/test` checks delivery alone.
 
 ## 7. Connect monitoring
 
@@ -174,7 +176,7 @@ All routes below `/api/v1/workspaces/{workspace}` require
 | PUT | `/{workspace}/embeddings` | Set the embeddings credential |
 | PUT | `/{workspace}/notifications` | Set Slack or Discord destination |
 | POST | `/{workspace}/notifications/test` | Post a test message |
-| POST | `/{workspace}/test-investigation` | Run a real investigation end to end |
+| POST | `/{workspace}/test-investigation` | Queue a real investigation end to end (returns 202) |
 | POST | `/{workspace}/alert-token/rotate` | Issue a new ingestion token |
 | GET / POST | `/{workspace}/runbooks` | Coverage / upload |
 

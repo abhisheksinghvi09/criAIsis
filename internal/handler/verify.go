@@ -1,21 +1,20 @@
 package handler
 
 import (
-	"encoding/json"
 	"net/http"
 	"time"
 
-	"criaisis/internal/domain/entity"
 	"criaisis/internal/domain/value"
+	"criaisis/internal/service/incident"
 )
 
 // sampleIncidentTitle is deliberately explicit, so a test investigation is never
 // mistaken for a real outage by whoever is watching the channel.
 const sampleIncidentTitle = "criAIsis setup check: simulated checkout failure"
 
-// RunTestInvestigation runs a complete, real investigation on a representative
+// RunTestInvestigation queues a complete, real investigation on a representative
 // incident using the tenant's own credentials and their own runbooks, and delivers
-// it to their channel.
+// it to their channel. It returns 202 immediately.
 //
 // This is the onboarding proof: it exercises the model key, the embedding key,
 // retrieval over whatever runbooks they have uploaded, and delivery. Anything
@@ -33,63 +32,31 @@ func (h *WorkspaceHandler) RunTestInvestigation(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	inc, err := sampleIncident(ws.ID())
+	// Queued like any real incident: a full debate outlasts the request timeout,
+	// and the queue path is exactly what a real alert will take. The caller polls
+	// GET /incidents/{id} for the transcript, or a failed status.
+	inc, err := h.incidents.Open(r.Context(), sampleIncident(ws.ID()))
 	if err != nil {
-		h.fail(w, "building sample incident", err)
+		if inc == nil {
+			h.fail(w, "opening setup check", err)
+			return
+		}
+		h.log.Error().Err(err).Str("workspace", ws.SlackTeamID()).Msg("setup check could not be queued")
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the investigation queue is full; try again shortly"})
 		return
 	}
 
-	// The incident is persisted like any other, so the transcript is auditable and
-	// the customer can see exactly what their keys produced.
-	result, err := h.incidents.InvestigateNow(r.Context(), inc)
-	if err != nil {
-		h.log.Error().Err(err).Str("workspace", ws.SlackTeamID()).Msg("setup check failed")
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":         "investigation complete and delivered",
-		"incident_id":    inc.ID().String(),
-		"specialists":    result.Specialists,
-		"classification": result.Classification,
-		"owning_domain":  result.OwningDomain,
-		"elapsed":        result.Elapsed,
-		"runbooks_cited": result.Citations,
-		"note":           "Check your Slack or Discord channel: the full transcript was posted there.",
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status":      "investigation queued",
+		"incident_id": inc.ID().String(),
+		"note":        "Poll GET /incidents/{incident_id}; the verdict is also posted to your channel when it finishes.",
 	})
 }
 
 // sampleIncident is a realistic, clearly-labelled incident with the kind of
 // telemetry a real alert carries, so retrieval has something concrete to match.
-func sampleIncident(wsID value.WorkspaceID) (*entity.Incident, error) {
-	channel, err := value.NewSlackChannelID("C_SETUP_CHECK")
-	if err != nil {
-		return nil, err
-	}
-	thread, err := value.NewSlackThreadTS(time.Now().UTC().Format("20060102150405") + ".000000")
-	if err != nil {
-		return nil, err
-	}
-	user, err := value.NewSlackUserID("U_SETUP_CHECK")
-	if err != nil {
-		return nil, err
-	}
-
-	inc, err := entity.NewIncident(
-		wsID, sampleIncidentTitle,
-		"Checkout API returning HTTP 504 and the database is refusing new connections. "+
-			"This is a setup check run from the criAIsis management API, not a real outage.",
-		channel, thread, value.SeveritySev3, user, json.RawMessage("{}"),
-	)
-	if err != nil {
-		return nil, err
-	}
-	if err := inc.SetTriggerType(value.TriggerTypeSlashCommand); err != nil {
-		return nil, err
-	}
-
-	err = inc.SetIncidentContext(value.NewIncidentContext(
+func sampleIncident(wsID value.WorkspaceID) incident.NewIncidentInput {
+	ictx := value.NewIncidentContext(
 		"manual", "criAIsis setup check",
 		[]string{
 			"FATAL: remaining connection slots are reserved for non-replication superuser connections",
@@ -103,6 +70,17 @@ func sampleIncident(wsID value.WorkspaceID) (*entity.Incident, error) {
 			"db_idle_in_transaction_count": 142,
 			"http_5xx_rate_percent":        68.5,
 		},
-	))
-	return inc, err
+	)
+	return incident.NewIncidentInput{
+		WorkspaceID: wsID,
+		Title:       sampleIncidentTitle,
+		Description: "Checkout API returning HTTP 504 and the database is refusing new connections. " +
+			"This is a setup check run from the criAIsis management API, not a real outage.",
+		Severity:  value.SeveritySev3,
+		Trigger:   value.TriggerTypeSlashCommand,
+		ChannelID: value.SlackChannelID("C_SETUP_CHECK"),
+		ThreadTS:  value.SlackThreadTS(time.Now().UTC().Format("20060102150405.000000")),
+		CreatedBy: value.SlackUserID("U_SETUP_CHECK"),
+		Context:   &ictx,
+	}
 }
