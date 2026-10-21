@@ -315,7 +315,12 @@ func (h *WorkspaceHandler) TestNotification(w http.ResponseWriter, r *http.Reque
 
 	notifier, err := h.resolver.ResolveNotifier(r.Context(), ws.ID())
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		h.log.Error().Err(err).Msg("resolving notifier")
+		msg := "could not prepare notifications for this workspace"
+		if errors.Is(err, tenant.ErrNotConfigured) {
+			msg = "set a notification destination first"
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
 		return
 	}
 

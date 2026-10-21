@@ -26,6 +26,9 @@ func NewService(docs repository.DocumentRepository, chunks repository.ChunkRepos
 	return &Service{docs: docs, chunks: chunks, embedder: embedder}
 }
 
+// embedBatchSize is how many chunks go to the embedding API per request.
+const embedBatchSize = 64
+
 // IndexNew persists a new document in 'pending' status and then indexes it.
 func (s *Service) IndexNew(ctx context.Context, doc *entity.Document) error {
 	if err := s.docs.Create(ctx, doc); err != nil {
@@ -63,9 +66,15 @@ func (s *Service) index(ctx context.Context, doc *entity.Document) (int, error) 
 		texts[i] = seg.Text
 	}
 
-	embeddings, err := s.embedder.Embed(ctx, texts)
-	if err != nil {
-		return 0, fmt.Errorf("embedding %q: %w", doc.Title(), err)
+	// Batched: a large runbook in one request exceeds embedding APIs' input limits.
+	embeddings := make([]value.EmbeddingVector, 0, len(texts))
+	for start := 0; start < len(texts); start += embedBatchSize {
+		end := min(start+embedBatchSize, len(texts))
+		batch, err := s.embedder.Embed(ctx, texts[start:end])
+		if err != nil {
+			return 0, fmt.Errorf("embedding %q: %w", doc.Title(), err)
+		}
+		embeddings = append(embeddings, batch...)
 	}
 	if len(embeddings) != len(segments) {
 		return 0, fmt.Errorf("embedding %q: got %d vectors for %d chunks", doc.Title(), len(embeddings), len(segments))

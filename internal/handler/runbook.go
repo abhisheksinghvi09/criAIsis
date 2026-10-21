@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -91,23 +92,36 @@ func (h *RunbookHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	// Re-uploading unchanged content would duplicate every chunk and skew retrieval.
 	if existing, err := h.documents.GetByContentHash(r.Context(), ws.ID(), doc.ContentHash()); err == nil && existing != nil {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"status": "already ingested, unchanged", "title": existing.Title(), "chunks": existing.ChunkCount(),
-		})
-		return
+		if existing.Status() == value.DocumentStatusIndexed {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"status": "already ingested, unchanged", "title": existing.Title(), "chunks": existing.ChunkCount(),
+			})
+			return
+		}
+		// A failed or abandoned attempt has no usable chunks and must not block a
+		// retry of the same content: clear it and ingest afresh.
+		if err := h.documents.Delete(r.Context(), ws.ID(), existing.ID()); err != nil {
+			h.log.Error().Err(err).Msg("clearing failed runbook before retry")
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not retry ingestion"})
+			return
+		}
 	}
 
 	tenantEmbedder, err := h.resolver.ResolveEmbedder(r.Context(), ws.ID())
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "set your embedding credential before uploading runbooks: " + err.Error(),
-		})
+		h.log.Error().Err(err).Msg("resolving embedder")
+		msg := "could not prepare embeddings for this workspace"
+		if errors.Is(err, tenant.ErrNotConfigured) {
+			msg = "set your embedding credential before uploading runbooks"
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
 		return
 	}
 
 	if err := ingest.NewService(h.documents, h.chunks, tenantEmbedder).IndexNew(r.Context(), doc); err != nil {
 		h.log.Error().Err(err).Str("workspace", ws.SlackTeamID()).Msg("runbook ingestion failed")
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "ingestion failed: " + err.Error()})
+		// Detail is in the log; the embedding provider's error text is not for the client.
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "ingestion failed; check your embedding credential and try again"})
 		return
 	}
 
