@@ -95,7 +95,7 @@ func TestPostMessage_SendsChannelTextAndThread(t *testing.T) {
 		}
 		body, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(body, &captured)
-		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
 	})
 
 	if err := c.PostMessage(context.Background(), "xoxb-token", "C123", "1700.0001", "the verdict"); err != nil {
@@ -111,7 +111,7 @@ func TestPostMessage_OmitsThreadTSWhenEmpty(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(body, &captured)
-		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
 	})
 
 	if err := c.PostMessage(context.Background(), "xoxb-token", "C123", "", "hello"); err != nil {
@@ -140,7 +140,7 @@ func TestPostEphemeral_SendsChannelUserAndText(t *testing.T) {
 		}
 		body, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(body, &captured)
-		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
 	})
 
 	if err := c.PostEphemeral(context.Background(), "xoxb-token", "C123", "U999", "only you can see this"); err != nil {
@@ -148,5 +148,15 @@ func TestPostEphemeral_SendsChannelUserAndText(t *testing.T) {
 	}
 	if captured["channel"] != "C123" || captured["user"] != "U999" || captured["text"] != "only you can see this" {
 		t.Errorf("unexpected payload: %+v", captured)
+	}
+}
+
+func TestPostMessage_OKFalseIsAnError(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":false,"error":"not_in_channel"}`))
+	})
+	err := c.PostMessage(context.Background(), "xoxb-token", "C123", "", "hi")
+	if err == nil || !strings.Contains(err.Error(), "not_in_channel") {
+		t.Errorf("expected a not_in_channel error, got %v", err)
 	}
 }

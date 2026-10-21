@@ -51,6 +51,8 @@ func (d *Discord) Notify(ctx context.Context, report Report) error {
 	}
 
 	return post(ctx, d.client, d.webhookURL, map[string]any{
+		// Untrusted text must never ping @everyone or roles.
+		"allowed_mentions": map[string]any{"parse": []string{}},
 		"embeds": []any{map[string]any{
 			"title":       truncate(report.IncidentTitle, 256),
 			"description": truncate("**"+report.headline()+"**\n\n"+report.Consensus, discordDescriptionLimit),

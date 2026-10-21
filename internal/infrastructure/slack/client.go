@@ -72,7 +72,7 @@ func (c *DefaultClient) ExchangeOAuthCode(ctx context.Context, clientID, clientS
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return nil, fmt.Errorf("reading oauth response: %w", err)
 	}
@@ -130,5 +130,20 @@ func (c *DefaultClient) postJSON(ctx context.Context, token, endpoint string, pa
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("slack api returned status %d", resp.StatusCode)
 	}
+
+	// Slack reports most failures (not_in_channel, invalid_auth, ...) as 200 with ok:false.
+	var out struct {
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&out); err != nil {
+		return fmt.Errorf("parsing slack api %s response: %w", endpoint, err)
+	}
+	if !out.OK {
+		return fmt.Errorf("slack api %s: %s", endpoint, out.Error)
+	}
 	return nil
 }
+
+// maxResponseBytes bounds any Slack response we read.
+const maxResponseBytes = 1 << 20

@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"net/http"
+	"strings"
 )
 
 // slackTextLimit is the per-block character ceiling the Slack API enforces.
@@ -38,11 +39,11 @@ func (s *Slack) Notify(ctx context.Context, report Report) error {
 		},
 		map[string]any{
 			"type":     "context",
-			"elements": []any{map[string]any{"type": "mrkdwn", "text": report.headline()}},
+			"elements": []any{map[string]any{"type": "mrkdwn", "text": slackEscape(report.headline())}},
 		},
 		map[string]any{
 			"type": "section",
-			"text": map[string]any{"type": "mrkdwn", "text": truncate("*Consensus*\n"+report.Consensus, slackTextLimit)},
+			"text": map[string]any{"type": "mrkdwn", "text": truncate("*Consensus*\n"+slackEscape(report.Consensus), slackTextLimit)},
 		},
 	}
 
@@ -62,7 +63,7 @@ func (s *Slack) Notify(ctx context.Context, report Report) error {
 
 	return post(ctx, s.client, s.webhookURL, map[string]any{
 		// text is the notification preview and the accessibility fallback.
-		"text":        report.IncidentTitle + " — " + report.headline(),
+		"text":        slackEscape(report.IncidentTitle + " — " + report.headline()),
 		"attachments": []any{map[string]any{"color": color, "blocks": blocks}},
 	})
 }
@@ -74,7 +75,7 @@ func appendSlackList(blocks []any, title string, items []string) []any {
 	}
 	var body string
 	for _, item := range items {
-		body += "• " + item + "\n"
+		body += "• " + slackEscape(item) + "\n"
 	}
 	return append(blocks, map[string]any{
 		"type": "section",
@@ -89,7 +90,7 @@ func appendSlackCode(blocks []any, title string, items []string) []any {
 	}
 	var body string
 	for _, item := range items {
-		body += item + "\n"
+		body += strings.ReplaceAll(item, "```", "'''") + "\n" // cannot close the fence early
 	}
 	return append(blocks, map[string]any{
 		"type": "section",
@@ -105,13 +106,17 @@ func appendSlackSpecialists(blocks []any, specialists []SpecialistSummary) []any
 	var body string
 	for _, s := range specialists {
 		if s.Failed {
-			body += "• *" + s.Persona + "*: no hypothesis (" + s.FailReason + ")\n"
+			body += "• *" + s.Persona + "*: no hypothesis (" + slackEscape(s.FailReason) + ")\n"
 			continue
 		}
-		body += "• *" + s.Persona + "* (" + s.Confidence + ownershipNote(s.OwnsThis) + "): " + s.Hypothesis + "\n"
+		body += "• *" + s.Persona + "* (" + s.Confidence + ownershipNote(s.OwnsThis) + "): " + slackEscape(s.Hypothesis) + "\n"
 	}
 	return append(blocks, map[string]any{
 		"type": "section",
 		"text": map[string]any{"type": "mrkdwn", "text": truncate("*Specialist positions*\n"+body, slackTextLimit)},
 	})
 }
+
+// slackEscape neutralises Slack's control characters. Alert titles and model
+// output are untrusted, and an unescaped "<!channel>" would page the channel.
+var slackEscape = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace

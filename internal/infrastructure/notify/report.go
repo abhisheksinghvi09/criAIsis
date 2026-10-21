@@ -3,6 +3,7 @@ package notify
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // Report is what an on-call engineer actually reads: the verdict first, then the
@@ -68,9 +69,9 @@ func truncate(text string, limit int) string {
 	if len(text) <= limit {
 		return text
 	}
-	runes := []rune(text)
-	for len(string(runes)) > limit-3 && len(runes) > 0 {
-		runes = runes[:len(runes)-1]
+	cut := limit - 3
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
 	}
-	return string(runes) + "..."
+	return text[:cut] + "..."
 }

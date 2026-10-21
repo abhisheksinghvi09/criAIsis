@@ -12,3 +12,6 @@ func SlackForTest(rawURL string) *Slack {
 func DiscordForTest(rawURL string) *Discord {
 	return &Discord{client: noRedirectClient(), webhookURL: rawURL}
 }
+
+// SlackEscapeForTest exposes the escaper to the external test package.
+var SlackEscapeForTest = slackEscape

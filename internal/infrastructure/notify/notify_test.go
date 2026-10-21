@@ -207,3 +207,9 @@ func TestNotify_SurfacesRejection(t *testing.T) {
 		t.Error("expected a 403 to be reported as an error")
 	}
 }
+
+func TestSlackEscape_NeutralisesChannelPings(t *testing.T) {
+	if got := notify.SlackEscapeForTest("<!channel> a&b"); got != "&lt;!channel&gt; a&amp;b" {
+		t.Errorf("slackEscape = %q", got)
+	}
+}

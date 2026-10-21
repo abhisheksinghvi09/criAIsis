@@ -38,7 +38,11 @@ type EmbeddingOptions struct {
 // NewOpenAIEmbedder constructs an embeddings client for a single tenant.
 func NewOpenAIEmbedder(opts EmbeddingOptions) *OpenAIEmbedder {
 	return &OpenAIEmbedder{
-		client:  &http.Client{Timeout: embeddingTimeout},
+		client: &http.Client{
+			Timeout: embeddingTimeout,
+			// The base URL was SSRF-checked; a redirect would bypass that check.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 		baseURL: strings.TrimSuffix(opts.BaseURL, "/"),
 		apiKey:  opts.APIKey,
 		model:   opts.Model,
