@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -448,5 +449,24 @@ func TestRecoverOrphaned_RequeuesLostWorkAndLeavesFinishedInvestigationsAlone(t 
 	}
 	if jobsFor(queued.IncidentID) != 1 {
 		t.Error("an incident with a live job got a second one")
+	}
+}
+
+// The schema, not just the queries, must refuse a row that points at another
+// tenant's parent.
+func TestSchema_RejectsCrossTenantReferences(t *testing.T) {
+	f := newQueueFixture(t, 2)
+	a := f.incident(t, 0)
+	tenantB := f.ws[1].ID().UUID()
+	ctx := context.Background()
+
+	for name, sql := range map[string]string{
+		"debate turn": `INSERT INTO debate_turns (incident_id, workspace_id, stage, turn_type, content) VALUES ($1, $2, 1, 'synthesis', 'x')`,
+		"job":         `INSERT INTO jobs (incident_id, workspace_id) VALUES ($1, $2)`,
+	} {
+		_, err := f.pool.Exec(ctx, sql, a.IncidentID, tenantB)
+		if err == nil || !strings.Contains(err.Error(), "23503") {
+			t.Errorf("%s pointing at another tenant's incident: err = %v, want a foreign key violation", name, err)
+		}
 	}
 }
