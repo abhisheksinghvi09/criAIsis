@@ -15,6 +15,9 @@ import (
 // Secrets are held only as ciphertext. The domain layer never sees a plaintext
 // key, so an accidental log of this entity cannot leak one.
 type WorkspaceSettings struct {
+	// version is the persisted row version for optimistic concurrency.
+	version int64
+
 	workspaceID value.WorkspaceID
 
 	llmProvider        string
@@ -228,4 +231,13 @@ func orDefault(candidate, fallback string) string {
 		return trimmed
 	}
 	return fallback
+}
+
+// Version is the row version this copy was loaded at (persistence detail).
+func (s *WorkspaceSettings) Version() int64 { return s.version }
+
+// WithVersion records the row version; only repositories call it.
+func (s *WorkspaceSettings) WithVersion(v int64) *WorkspaceSettings {
+	s.version = v
+	return s
 }

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -20,7 +21,7 @@ const settingsColumns = `workspace_id,
 	embedding_provider, embedding_api_key_encrypted, embedding_model, embedding_base_url,
 	notify_provider, notify_webhook_url_encrypted,
 	oncall_provider, oncall_api_key_encrypted, oncall_schedule_id,
-	created_at, updated_at`
+	created_at, updated_at, version`
 
 // PostgresSettingsRepository stores per-tenant integration credentials.
 type PostgresSettingsRepository struct {
@@ -38,7 +39,7 @@ func NewSettingsRepository(pool *pgxpool.Pool) *PostgresSettingsRepository {
 func (r *PostgresSettingsRepository) Create(ctx context.Context, s *entity.WorkspaceSettings) error {
 	const query = `
 		INSERT INTO workspace_settings (` + settingsColumns + `)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16);
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 0);
 	`
 	exec := GetExecutor(ctx, r.pool)
 	_, err := exec.Exec(ctx, query,
@@ -73,24 +74,27 @@ func (r *PostgresSettingsRepository) Update(ctx context.Context, s *entity.Works
 			embedding_model = $8, embedding_base_url = $9,
 			notify_provider = $10, notify_webhook_url_encrypted = $11,
 			oncall_provider = $12, oncall_api_key_encrypted = $13, oncall_schedule_id = $14,
-			updated_at = $15
-		WHERE workspace_id = $1;
+			updated_at = $15, version = version + 1
+		WHERE workspace_id = $1 AND version = $16
+		RETURNING version;
 	`
 	exec := GetExecutor(ctx, r.pool)
-	tag, err := exec.Exec(ctx, query,
+	var version int64
+	err := exec.QueryRow(ctx, query,
 		s.WorkspaceID().UUID(),
 		s.LLMProvider(), s.LLMAPIKeyEncrypted(), s.SpecialistModel(), s.SynthesisModel(),
 		s.EmbeddingProvider(), s.EmbeddingAPIKeyEncrypted(), s.EmbeddingModel(), s.EmbeddingBaseURL(),
 		s.NotifyProvider(), s.NotifyWebhookEncrypted(),
 		s.OnCallProvider(), s.OnCallAPIKeyEncrypted(), s.OnCallScheduleID(),
-		s.UpdatedAt(),
-	)
+		s.UpdatedAt(), s.Version(),
+	).Scan(&version)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return conflictOrMissing(ctx, exec, "workspace_settings", "workspace_id = $1", s.WorkspaceID().UUID())
+	}
 	if err != nil {
 		return fmt.Errorf("updating workspace settings: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("no settings row for workspace %s", s.WorkspaceID())
-	}
+	s.WithVersion(version)
 	return nil
 }
 
@@ -107,6 +111,7 @@ func scanSettings(row pgx.Row) (*entity.WorkspaceSettings, error) {
 		oncallProvider, oncallSchedule               string
 		oncallKey                                    []byte
 		createdAt, updatedAt                         time.Time
+		version                                      int64
 	)
 
 	if err := row.Scan(
@@ -115,7 +120,7 @@ func scanSettings(row pgx.Row) (*entity.WorkspaceSettings, error) {
 		&embeddingProvider, &embeddingKey, &embeddingModel, &baseURL,
 		&notifyProvider, &notifyWebhook,
 		&oncallProvider, &oncallKey, &oncallSchedule,
-		&createdAt, &updatedAt,
+		&createdAt, &updatedAt, &version,
 	); err != nil {
 		return nil, fmt.Errorf("scanning workspace settings: %w", err)
 	}
@@ -132,5 +137,5 @@ func scanSettings(row pgx.Row) (*entity.WorkspaceSettings, error) {
 		notifyProvider, notifyWebhook,
 		oncallProvider, oncallKey, oncallSchedule,
 		createdAt, updatedAt,
-	), nil
+	).WithVersion(version), nil
 }

@@ -49,7 +49,7 @@ func (r *PostgresWorkspaceRepository) Create(ctx context.Context, ws *entity.Wor
 
 func (r *PostgresWorkspaceRepository) GetByID(ctx context.Context, id value.WorkspaceID) (*entity.Workspace, error) {
 	const query = `
-		SELECT id, slack_team_id, slack_team_name, slack_bot_token_encrypted, webhook_secret_hash, admin_api_key_hash, created_at, updated_at
+		SELECT id, slack_team_id, slack_team_name, slack_bot_token_encrypted, webhook_secret_hash, admin_api_key_hash, created_at, updated_at, version
 		FROM workspaces
 		WHERE id = $1;
 	`
@@ -63,6 +63,7 @@ func (r *PostgresWorkspaceRepository) GetByID(ctx context.Context, id value.Work
 		adminHash  []byte
 		createdAt  time.Time
 		updatedAt  time.Time
+		version    int64
 	)
 
 	err := exec.QueryRow(ctx, query, id.UUID()).Scan(
@@ -74,6 +75,7 @@ func (r *PostgresWorkspaceRepository) GetByID(ctx context.Context, id value.Work
 		&adminHash,
 		&createdAt,
 		&updatedAt,
+		&version,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -87,12 +89,16 @@ func (r *PostgresWorkspaceRepository) GetByID(ctx context.Context, id value.Work
 		return nil, fmt.Errorf("invalid workspace id in db: %w", err)
 	}
 
-	return entity.ReconstituteWorkspace(wsID, teamID, teamName, tokenBytes, hookHash, adminHash, createdAt, updatedAt)
+	ws, err := entity.ReconstituteWorkspace(wsID, teamID, teamName, tokenBytes, hookHash, adminHash, createdAt, updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return ws.WithVersion(version), nil
 }
 
 func (r *PostgresWorkspaceRepository) GetBySlackTeamID(ctx context.Context, teamID string) (*entity.Workspace, error) {
 	const query = `
-		SELECT id, slack_team_id, slack_team_name, slack_bot_token_encrypted, webhook_secret_hash, admin_api_key_hash, created_at, updated_at
+		SELECT id, slack_team_id, slack_team_name, slack_bot_token_encrypted, webhook_secret_hash, admin_api_key_hash, created_at, updated_at, version
 		FROM workspaces
 		WHERE slack_team_id = $1;
 	`
@@ -106,6 +112,7 @@ func (r *PostgresWorkspaceRepository) GetBySlackTeamID(ctx context.Context, team
 		adminHash  []byte
 		createdAt  time.Time
 		updatedAt  time.Time
+		version    int64
 	)
 
 	err := exec.QueryRow(ctx, query, teamID).Scan(
@@ -117,6 +124,7 @@ func (r *PostgresWorkspaceRepository) GetBySlackTeamID(ctx context.Context, team
 		&adminHash,
 		&createdAt,
 		&updatedAt,
+		&version,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -130,7 +138,11 @@ func (r *PostgresWorkspaceRepository) GetBySlackTeamID(ctx context.Context, team
 		return nil, fmt.Errorf("invalid workspace id in db: %w", err)
 	}
 
-	return entity.ReconstituteWorkspace(wsID, rawTeamID, teamName, tokenBytes, hookHash, adminHash, createdAt, updatedAt)
+	ws, err := entity.ReconstituteWorkspace(wsID, rawTeamID, teamName, tokenBytes, hookHash, adminHash, createdAt, updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return ws.WithVersion(version), nil
 }
 
 func (r *PostgresWorkspaceRepository) Update(ctx context.Context, ws *entity.Workspace) error {
@@ -140,23 +152,28 @@ func (r *PostgresWorkspaceRepository) Update(ctx context.Context, ws *entity.Wor
 		    slack_bot_token_encrypted = $3,
 		    webhook_secret_hash = $4,
 		    admin_api_key_hash = $5,
-		    updated_at = $6
-		WHERE id = $1;
+		    updated_at = $6,
+		    version = version + 1
+		WHERE id = $1 AND version = $7
+		RETURNING version;
 	`
 	exec := GetExecutor(ctx, r.pool)
-	tag, err := exec.Exec(ctx, query,
+	var version int64
+	err := exec.QueryRow(ctx, query,
 		ws.ID().UUID(),
 		ws.SlackTeamName(),
 		ws.SlackBotTokenEncrypted(),
 		ws.WebhookSecretHash(),
 		ws.AdminAPIKeyHash(),
 		ws.UpdatedAt(),
-	)
+		ws.Version(),
+	).Scan(&version)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return conflictOrMissing(ctx, exec, "workspaces", "id = $1", ws.ID().UUID())
+	}
 	if err != nil {
 		return fmt.Errorf("updating workspace: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("workspace '%s' not found for update", ws.ID())
-	}
+	ws.WithVersion(version)
 	return nil
 }

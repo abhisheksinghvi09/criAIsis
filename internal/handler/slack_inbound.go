@@ -188,10 +188,18 @@ func (h *SlackInboundHandler) HandleOAuthCallback(w http.ResponseWriter, r *http
 
 	w.Header().Set("Cache-Control", "no-store")
 	if err == nil && ws != nil {
-		// Existing workspace reinstall: update team name and bot token
-		_ = ws.UpdateTeamName(res.Team.Name)
-		_ = ws.UpdateBotToken(encryptedToken)
-		if err := h.workspaces.Update(ctx, ws); err != nil {
+		// Existing workspace reinstall: update team name and bot token on a fresh
+		// copy, so a concurrent alert-token rotation is not overwritten.
+		err := repository.RetryOnConflict(ctx, func() error {
+			fresh, err := h.workspaces.GetBySlackTeamID(ctx, res.Team.ID)
+			if err != nil {
+				return err
+			}
+			_ = fresh.UpdateTeamName(res.Team.Name)
+			_ = fresh.UpdateBotToken(encryptedToken)
+			return h.workspaces.Update(ctx, fresh)
+		})
+		if err != nil {
 			h.log.Error().Err(err).Msg("failed updating workspace on reinstall")
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed updating workspace"})
 			return

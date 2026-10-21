@@ -162,11 +162,10 @@ func (s *Service) MarkFailed(ctx context.Context, j job.IncidentJob) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 
-	inc, err := s.incidents.GetByID(ctx, j.WorkspaceID, j.IncidentID)
-	if err != nil || inc.Fail(time.Now().UTC()) != nil {
-		return // gone, or already resolved/failed: nothing to record
-	}
-	if err := s.incidents.Update(ctx, inc); err != nil {
+	_, err := s.mutate(ctx, j.WorkspaceID, j.IncidentID, func(inc *entity.Incident) error {
+		return inc.Fail(time.Now().UTC()) // refuses if a human resolved it meanwhile
+	})
+	if err != nil && !errors.Is(err, entity.ErrNotInvestigating) {
 		s.log.Error().Err(err).Str("incident_id", j.IncidentID.String()).Msg("could not mark incident failed")
 	}
 }
@@ -244,10 +243,13 @@ func (s *Service) openRoom(ctx context.Context, runtime *tenant.Runtime, inc *en
 		s.log.Error().Err(err).Str("incident_id", inc.ID().String()).Msg("could not open incident channel")
 		return nil
 	}
-	if err := inc.MoveToSlackThread(value.SlackChannelID(room.ChannelID), value.SlackThreadTS(room.ThreadTS)); err == nil {
-		if err := s.incidents.Update(ctx, inc); err != nil {
-			s.log.Error().Err(err).Str("incident_id", inc.ID().String()).Msg("could not record incident channel")
-		}
+	moved, err := s.mutate(ctx, inc.WorkspaceID(), inc.ID(), func(fresh *entity.Incident) error {
+		return fresh.MoveToSlackThread(value.SlackChannelID(room.ChannelID), value.SlackThreadTS(room.ThreadTS))
+	})
+	if err != nil {
+		s.log.Error().Err(err).Str("incident_id", inc.ID().String()).Msg("could not record incident channel")
+	} else {
+		*inc = *moved // the rest of this job works from the saved state
 	}
 	return room
 }
@@ -283,15 +285,29 @@ func (s *Service) FindByThread(ctx context.Context, wsID value.WorkspaceID, ch v
 
 // Resolve closes an incident and locks its transcript.
 func (s *Service) Resolve(ctx context.Context, wsID value.WorkspaceID, id uuid.UUID) (*entity.Incident, error) {
-	inc, err := s.incidents.GetByID(ctx, wsID, id)
+	return s.mutate(ctx, wsID, id, func(inc *entity.Incident) error {
+		return inc.Resolve(time.Now().UTC())
+	})
+}
+
+// mutate applies one change to a fresh copy of an incident and saves it, retrying
+// if a concurrent writer (a worker failing the job, a human resolving it) got
+// there first. The change sees the latest state each time, so it can refuse an
+// incident that is no longer in the state it expects.
+func (s *Service) mutate(ctx context.Context, wsID value.WorkspaceID, id uuid.UUID, change func(*entity.Incident) error) (*entity.Incident, error) {
+	var inc *entity.Incident
+	err := repository.RetryOnConflict(ctx, func() error {
+		var err error
+		if inc, err = s.incidents.GetByID(ctx, wsID, id); err != nil {
+			return fmt.Errorf("loading incident: %w", err)
+		}
+		if err := change(inc); err != nil {
+			return err
+		}
+		return s.incidents.Update(ctx, inc)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("loading incident: %w", err)
-	}
-	if err := inc.Resolve(time.Now().UTC()); err != nil {
 		return nil, err
-	}
-	if err := s.incidents.Update(ctx, inc); err != nil {
-		return nil, fmt.Errorf("persisting resolution: %w", err)
 	}
 	return inc, nil
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"criaisis/internal/domain/entity"
+	"criaisis/internal/domain/repository"
 	"criaisis/internal/domain/value"
 	"criaisis/internal/infrastructure/postgres"
 	"criaisis/internal/job"
@@ -468,5 +469,58 @@ func TestSchema_RejectsCrossTenantReferences(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "23503") {
 			t.Errorf("%s pointing at another tenant's incident: err = %v, want a foreign key violation", name, err)
 		}
+	}
+}
+
+// Two writers holding the same version: the first wins, the second gets
+// ErrConflict instead of silently overwriting it.
+func TestOptimisticConcurrency_RejectsAStaleWrite(t *testing.T) {
+	f := newQueueFixture(t, 1)
+	ctx := context.Background()
+	j := f.incident(t, 0)
+	repo := postgres.NewIncidentRepository(f.pool)
+
+	human, _ := repo.GetByID(ctx, j.WorkspaceID, j.IncidentID)
+	worker, _ := repo.GetByID(ctx, j.WorkspaceID, j.IncidentID)
+
+	_ = human.Resolve(time.Now().UTC())
+	if err := repo.Update(ctx, human); err != nil {
+		t.Fatalf("first writer: %v", err)
+	}
+	_ = worker.Fail(time.Now().UTC())
+	if err := repo.Update(ctx, worker); !errors.Is(err, repository.ErrConflict) {
+		t.Fatalf("stale writer: err = %v, want ErrConflict", err)
+	}
+
+	// Retrying on fresh data sees the resolution and declines to fail it.
+	err := repository.RetryOnConflict(ctx, func() error {
+		fresh, err := repo.GetByID(ctx, j.WorkspaceID, j.IncidentID)
+		if err != nil {
+			return err
+		}
+		if err := fresh.Fail(time.Now().UTC()); err != nil {
+			return err
+		}
+		return repo.Update(ctx, fresh)
+	})
+	if !errors.Is(err, entity.ErrNotInvestigating) {
+		t.Errorf("retry err = %v, want ErrNotInvestigating", err)
+	}
+	final, _ := repo.GetByID(ctx, j.WorkspaceID, j.IncidentID)
+	if final.Status() != value.IncidentStatusResolved {
+		t.Errorf("final status %s: the human's resolution was overwritten", final.Status())
+	}
+
+	// Same guarantee for workspaces (alert-token rotation vs Slack reinstall).
+	wsRepo := postgres.NewWorkspaceRepository(f.pool)
+	a, _ := wsRepo.GetByID(ctx, f.ws[0].ID())
+	b, _ := wsRepo.GetByID(ctx, f.ws[0].ID())
+	_, _ = a.GenerateWebhookSecret()
+	if err := wsRepo.Update(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	_ = b.UpdateTeamName("renamed")
+	if err := wsRepo.Update(ctx, b); !errors.Is(err, repository.ErrConflict) {
+		t.Errorf("stale workspace write: err = %v, want ErrConflict", err)
 	}
 }

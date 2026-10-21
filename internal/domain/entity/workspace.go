@@ -16,6 +16,9 @@ import (
 // Workspace models a Slack tenant installation.
 // It serves as the root isolation boundary for all subsequent data structures.
 type Workspace struct {
+	// version is the persisted row version for optimistic concurrency.
+	version int64
+
 	id                     value.WorkspaceID
 	slackTeamID            string
 	slackTeamName          string
@@ -169,4 +172,13 @@ func verifySecret(digest []byte, presented string) bool {
 	}
 	sum := sha256.Sum256([]byte(presented))
 	return subtle.ConstantTimeCompare(sum[:], digest) == 1
+}
+
+// Version is the row version this copy was loaded at (persistence detail).
+func (w *Workspace) Version() int64 { return w.version }
+
+// WithVersion records the row version; only repositories call it.
+func (w *Workspace) WithVersion(v int64) *Workspace {
+	w.version = v
+	return w
 }

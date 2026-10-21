@@ -1,13 +1,11 @@
 package handler
 
 import (
-	"criaisis/internal/domain/value"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"sync"
 
 	"criaisis/internal/domain/entity"
 	"criaisis/internal/domain/repository"
@@ -349,21 +347,21 @@ func (h *WorkspaceHandler) RotateAlertToken(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Re-read under the workspace lock: Update rewrites every column, so a copy
-	// loaded before a concurrent change would silently undo it.
-	defer lockWorkspace(ws.ID())()
-	ws, err := h.workspaces.GetByID(r.Context(), ws.ID())
-	if err != nil {
-		h.fail(w, "reloading workspace", err)
-		return
-	}
-	token, err := ws.GenerateWebhookSecret()
+	// Reload and save under optimistic concurrency: a copy loaded before a
+	// concurrent change (a Slack reinstall) must not overwrite it.
+	var token string
+	err := repository.RetryOnConflict(r.Context(), func() error {
+		fresh, err := h.workspaces.GetByID(r.Context(), ws.ID())
+		if err != nil {
+			return err
+		}
+		if token, err = fresh.GenerateWebhookSecret(); err != nil {
+			return err
+		}
+		return h.workspaces.Update(r.Context(), fresh)
+	})
 	if err != nil {
 		h.fail(w, "rotating alert token", err)
-		return
-	}
-	if err := h.workspaces.Update(r.Context(), ws); err != nil {
-		h.fail(w, "saving rotated token", err)
 		return
 	}
 
@@ -436,48 +434,40 @@ func (h *WorkspaceHandler) authenticated(w http.ResponseWriter, r *http.Request)
 	return ws, settings, true
 }
 
-// workspaceLocks serialises read-modify-write cycles on one tenant's rows.
-// ponytail: in-process only. With more than one replica, use SELECT ... FOR UPDATE
-// inside a transaction instead.
-var workspaceLocks sync.Map
-
-// lockWorkspace takes the tenant's lock and returns the function that releases it.
-func lockWorkspace(id value.WorkspaceID) func() {
-	mu, _ := workspaceLocks.LoadOrStore(id, &sync.Mutex{})
-	mu.(*sync.Mutex).Lock()
-	return mu.(*sync.Mutex).Unlock
-}
-
 // updateSettings applies one change to a fresh copy of the tenant's settings.
 //
 // The handlers verify credentials against an external service first, which can
-// take many seconds. Writing back the copy loaded before that check would
-// overwrite anything saved meanwhile (the settings row is written whole), so the
-// row is re-read and modified only after the slow work is done.
+// take many seconds, so the row is re-read only after that slow work and saved
+// under optimistic concurrency: a write that raced another is retried on fresh
+// data rather than overwriting it. This holds across replicas, unlike a lock.
 func (h *WorkspaceHandler) updateSettings(
 	w http.ResponseWriter, r *http.Request, ws *entity.Workspace, message string,
 	apply func(*entity.WorkspaceSettings) error,
 ) {
-	defer lockWorkspace(ws.ID())()
-
-	settings, err := h.settings.Get(r.Context(), ws.ID())
-	if err != nil {
-		h.fail(w, "loading settings", err)
-		return
+	var settings *entity.WorkspaceSettings
+	var invalid error
+	err := repository.RetryOnConflict(r.Context(), func() error {
+		var err error
+		if settings, err = h.settings.Get(r.Context(), ws.ID()); err != nil {
+			return err
+		}
+		if invalid = apply(settings); invalid != nil {
+			return nil // a validation error is the caller's, not a conflict to retry
+		}
+		return h.settings.Update(r.Context(), settings)
+	})
+	switch {
+	case invalid != nil:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": invalid.Error()})
+	case err != nil:
+		h.fail(w, "saving settings", err)
+	default:
+		h.report(w, settings, message)
 	}
-	if err := apply(settings); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	h.save(w, r, settings, message)
 }
 
-// save persists settings and reports what remains before investigations can run.
-func (h *WorkspaceHandler) save(w http.ResponseWriter, r *http.Request, settings *entity.WorkspaceSettings, message string) {
-	if err := h.settings.Update(r.Context(), settings); err != nil {
-		h.fail(w, "saving settings", err)
-		return
-	}
+// report tells the caller what remains before investigations can run.
+func (h *WorkspaceHandler) report(w http.ResponseWriter, settings *entity.WorkspaceSettings, message string) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":               message,
 		"ready_to_investigate": settings.IsReadyToInvestigate(),

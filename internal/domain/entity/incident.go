@@ -14,10 +14,15 @@ import (
 
 var (
 	ErrIncidentAlreadyResolved = errors.New("incident is already resolved")
+	// ErrNotInvestigating means only an investigating incident can be failed.
+	ErrNotInvestigating = errors.New("incident is no longer investigating")
 )
 
 // Incident serves as the aggregate root for a multi-agent debate session anchored to a Slack thread.
 type Incident struct {
+	// version is the persisted row version for optimistic concurrency.
+	version int64
+
 	id                 uuid.UUID
 	workspaceID        value.WorkspaceID
 	title              string
@@ -196,7 +201,7 @@ func (i *Incident) Resolve(resolvedAt time.Time) error {
 // incident can fail; a resolved one keeps its outcome.
 func (i *Incident) Fail(at time.Time) error {
 	if i.status != value.IncidentStatusInvestigating {
-		return fmt.Errorf("cannot fail an incident that is %s", i.status)
+		return fmt.Errorf("%w: it is %s", ErrNotInvestigating, i.status)
 	}
 	i.status = value.IncidentStatusFailed
 	i.updatedAt = at
@@ -263,4 +268,13 @@ func (i *Incident) SetIncidentContext(ctx value.IncidentContext) error {
 	i.metadata = bytes
 	i.updatedAt = time.Now().UTC()
 	return nil
+}
+
+// Version is the row version this copy was loaded at (persistence detail).
+func (i *Incident) Version() int64 { return i.version }
+
+// WithVersion records the row version; only repositories call it.
+func (i *Incident) WithVersion(v int64) *Incident {
+	i.version = v
+	return i
 }

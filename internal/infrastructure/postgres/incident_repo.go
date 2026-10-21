@@ -58,7 +58,7 @@ func (r *PostgresIncidentRepository) Create(ctx context.Context, inc *entity.Inc
 func (r *PostgresIncidentRepository) GetByID(ctx context.Context, wsID value.WorkspaceID, id uuid.UUID) (*entity.Incident, error) {
 	const query = `
 		SELECT id, workspace_id, title, description, slack_channel_id, slack_thread_ts,
-		       severity, status, created_by_slack_user_id, metadata, resolved_at, created_at, updated_at
+		       severity, status, created_by_slack_user_id, metadata, resolved_at, created_at, updated_at, version
 		FROM incidents
 		WHERE workspace_id = $1 AND id = $2;
 	`
@@ -69,7 +69,7 @@ func (r *PostgresIncidentRepository) GetByID(ctx context.Context, wsID value.Wor
 func (r *PostgresIncidentRepository) GetBySlackThread(ctx context.Context, wsID value.WorkspaceID, channelID value.SlackChannelID, threadTS value.SlackThreadTS) (*entity.Incident, error) {
 	const query = `
 		SELECT id, workspace_id, title, description, slack_channel_id, slack_thread_ts,
-		       severity, status, created_by_slack_user_id, metadata, resolved_at, created_at, updated_at
+		       severity, status, created_by_slack_user_id, metadata, resolved_at, created_at, updated_at, version
 		FROM incidents
 		WHERE workspace_id = $1 AND slack_channel_id = $2 AND slack_thread_ts = $3;
 	`
@@ -80,7 +80,7 @@ func (r *PostgresIncidentRepository) GetBySlackThread(ctx context.Context, wsID 
 func (r *PostgresIncidentRepository) GetLatestByChannel(ctx context.Context, wsID value.WorkspaceID, channelID value.SlackChannelID) (*entity.Incident, error) {
 	const query = `
 		SELECT id, workspace_id, title, description, slack_channel_id, slack_thread_ts,
-		       severity, status, created_by_slack_user_id, metadata, resolved_at, created_at, updated_at
+		       severity, status, created_by_slack_user_id, metadata, resolved_at, created_at, updated_at, version
 		FROM incidents
 		WHERE workspace_id = $1 AND slack_channel_id = $2
 		ORDER BY created_at DESC
@@ -96,7 +96,7 @@ func (r *PostgresIncidentRepository) ListActive(ctx context.Context, wsID value.
 	}
 	const query = `
 		SELECT id, workspace_id, title, description, slack_channel_id, slack_thread_ts,
-		       severity, status, created_by_slack_user_id, metadata, resolved_at, created_at, updated_at
+		       severity, status, created_by_slack_user_id, metadata, resolved_at, created_at, updated_at, version
 		FROM incidents
 		WHERE workspace_id = $1 AND status = 'investigating'
 		ORDER BY created_at DESC
@@ -118,7 +118,7 @@ func (r *PostgresIncidentRepository) ListRecent(ctx context.Context, wsID value.
 	}
 	const query = `
 		SELECT id, workspace_id, title, description, slack_channel_id, slack_thread_ts,
-		       severity, status, created_by_slack_user_id, metadata, resolved_at, created_at, updated_at
+		       severity, status, created_by_slack_user_id, metadata, resolved_at, created_at, updated_at, version
 		FROM incidents
 		WHERE workspace_id = $1
 		ORDER BY created_at DESC
@@ -177,11 +177,14 @@ func (r *PostgresIncidentRepository) Update(ctx context.Context, inc *entity.Inc
 		    resolved_at = $6,
 		    updated_at = $7,
 		    slack_channel_id = $8,
-		    slack_thread_ts = $9
-		WHERE workspace_id = $1 AND id = $2;
+		    slack_thread_ts = $9,
+		    version = version + 1
+		WHERE workspace_id = $1 AND id = $2 AND version = $10
+		RETURNING version;
 	`
 	exec := GetExecutor(ctx, r.pool)
-	tag, err := exec.Exec(ctx, query,
+	var version int64
+	err := exec.QueryRow(ctx, query,
 		inc.WorkspaceID().UUID(),
 		inc.ID(),
 		inc.Severity().String(),
@@ -191,13 +194,15 @@ func (r *PostgresIncidentRepository) Update(ctx context.Context, inc *entity.Inc
 		inc.UpdatedAt(),
 		inc.SlackChannelID().String(),
 		inc.SlackThreadTS().String(),
-	)
+		inc.Version(),
+	).Scan(&version)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return conflictOrMissing(ctx, exec, "incidents", "id = $1 AND workspace_id = $2", inc.ID(), inc.WorkspaceID().UUID())
+	}
 	if err != nil {
 		return fmt.Errorf("updating incident: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("incident '%s' not found for update in workspace '%s'", inc.ID(), inc.WorkspaceID())
-	}
+	inc.WithVersion(version)
 	return nil
 }
 
@@ -216,11 +221,12 @@ func (r *PostgresIncidentRepository) scanIncident(row pgx.Row) (*entity.Incident
 		resolvedAt  *time.Time
 		createdAt   time.Time
 		updatedAt   time.Time
+		version     int64
 	)
 
 	err := row.Scan(
 		&id, &rawWsID, &title, &description, &channelID, &threadTS,
-		&rawSeverity, &rawStatus, &creatorID, &metadata, &resolvedAt, &createdAt, &updatedAt,
+		&rawSeverity, &rawStatus, &creatorID, &metadata, &resolvedAt, &createdAt, &updatedAt, &version,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -273,7 +279,7 @@ func (r *PostgresIncidentRepository) scanIncident(row pgx.Row) (*entity.Incident
 		resolvedAt,
 		createdAt,
 		updatedAt,
-	), nil
+	).WithVersion(version), nil
 }
 
 func (r *PostgresIncidentRepository) scanIncidentList(rows pgx.Rows) ([]*entity.Incident, error) {
@@ -293,11 +299,12 @@ func (r *PostgresIncidentRepository) scanIncidentList(rows pgx.Rows) ([]*entity.
 			resolvedAt  *time.Time
 			createdAt   time.Time
 			updatedAt   time.Time
+			version     int64
 		)
 
 		if err := rows.Scan(
 			&id, &rawWsID, &title, &description, &channelID, &threadTS,
-			&rawSeverity, &rawStatus, &creatorID, &metadata, &resolvedAt, &createdAt, &updatedAt,
+			&rawSeverity, &rawStatus, &creatorID, &metadata, &resolvedAt, &createdAt, &updatedAt, &version,
 		); err != nil {
 			return nil, fmt.Errorf("scanning incident row: %w", err)
 		}
@@ -346,7 +353,7 @@ func (r *PostgresIncidentRepository) scanIncidentList(rows pgx.Rows) ([]*entity.
 			resolvedAt,
 			createdAt,
 			updatedAt,
-		))
+		).WithVersion(version))
 	}
 
 	if err := rows.Err(); err != nil {
