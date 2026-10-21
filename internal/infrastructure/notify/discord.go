@@ -42,7 +42,7 @@ func (d *Discord) Notify(ctx context.Context, report Report) error {
 	fields := []any{}
 	fields = appendDiscordField(fields, "Contradictions resolved", bulletList(report.Contradictions))
 	fields = appendDiscordField(fields, "Next steps", bulletList(report.NextSteps))
-	fields = appendDiscordField(fields, "Run these (read-only)", codeList(report.Queries))
+	fields = appendDiscordField(fields, "Suggested diagnostics (model-generated: review before running)", codeList(report.Queries))
 	fields = appendDiscordField(fields, "Specialist positions", specialistList(report.Specialists))
 	fields = appendDiscordField(fields, "Cited runbooks", bulletList(report.Citations))
 

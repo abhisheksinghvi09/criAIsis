@@ -49,7 +49,7 @@ func (s *Slack) Notify(ctx context.Context, report Report) error {
 
 	blocks = appendSlackList(blocks, "Contradictions resolved", report.Contradictions)
 	blocks = appendSlackList(blocks, "Next steps", report.NextSteps)
-	blocks = appendSlackCode(blocks, "Run these (read-only)", report.Queries)
+	blocks = appendSlackCode(blocks, "Suggested diagnostics (model-generated: review before running)", report.Queries)
 	blocks = appendSlackSpecialists(blocks, report.Specialists)
 	blocks = appendSlackList(blocks, "Cited runbooks", report.Citations)
 
