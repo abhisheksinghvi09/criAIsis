@@ -85,3 +85,13 @@ func TestNew_HealthRoutesAlwaysMounted(t *testing.T) {
 		t.Fatalf("expected /healthz to be mounted unconditionally, got %d", rec.Code)
 	}
 }
+
+func TestNew_SetsSecurityHeaders(t *testing.T) {
+	rec := httptest.NewRecorder()
+	router.New(testServer(), router.Handlers{}).ServeHTTP(rec, httptest.NewRequest("GET", "/nope", nil))
+	for _, h := range []string{"X-Content-Type-Options", "X-Frame-Options", "Strict-Transport-Security", "Content-Security-Policy"} {
+		if rec.Header().Get(h) == "" {
+			t.Errorf("missing %s", h)
+		}
+	}
+}

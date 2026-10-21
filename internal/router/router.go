@@ -41,6 +41,7 @@ func New(srv *server.Server, h Handlers) http.Handler {
 	// nothing in this codebase reads RemoteAddr, so it bought nothing but the risk.
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(requestTimeout))
+	r.Use(securityHeaders)
 	r.Use(corsMiddleware(srv.Config.Server.CORSAllowedOrigins))
 
 	r.Get("/healthz", h.Health.Live)
@@ -116,6 +117,21 @@ func New(srv *server.Server, h Handlers) http.Handler {
 	return r
 }
 
+// securityHeaders sets the baseline browser protections for an API that returns
+// only JSON: no sniffing, no framing, no referrer leakage, and HTTPS pinning
+// (browsers ignore HSTS on plain http, so local development is unaffected).
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+		next.ServeHTTP(w, r)
+	})
+}
+
 // corsMiddleware permits only the configured origins. An empty allow-list denies
 // cross-origin requests rather than defaulting to permissive.
 func corsMiddleware(allowed []string) func(http.Handler) http.Handler {
@@ -129,7 +145,7 @@ func corsMiddleware(allowed []string) func(http.Handler) http.Handler {
 			if origin := r.Header.Get("Origin"); origin != "" && permitted[origin] {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Vary", "Origin")
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Criaisis-Token")
 			}
 			if r.Method == http.MethodOptions {
