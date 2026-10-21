@@ -95,3 +95,19 @@ func TestNew_SetsSecurityHeaders(t *testing.T) {
 		}
 	}
 }
+
+func TestNew_MetricsAreUnmountedWithoutAToken(t *testing.T) {
+	rec := httptest.NewRecorder()
+	router.New(testServer(), router.Handlers{}).ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("/metrics = %d with no token configured, want 404", rec.Code)
+	}
+
+	srv := testServer()
+	srv.Config.Server.MetricsToken = "tok"
+	rec = httptest.NewRecorder()
+	router.New(srv, router.Handlers{}).ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("/metrics = %d without the bearer token, want 401", rec.Code)
+	}
+}

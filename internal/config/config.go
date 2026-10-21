@@ -58,6 +58,8 @@ type ServerConfig struct {
 	WriteTimeout       int      `koanf:"write_timeout" validate:"required,gt=0"`
 	IdleTimeout        int      `koanf:"idle_timeout" validate:"required,gt=0"`
 	CORSAllowedOrigins []string `koanf:"cors_allowed_origins" validate:"required"`
+	// MetricsToken guards /metrics. Empty leaves the endpoint unmounted.
+	MetricsToken string `koanf:"metrics_token"`
 }
 
 // SecurityConfig holds the platform's own secrets.

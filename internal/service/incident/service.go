@@ -17,6 +17,7 @@ import (
 	"criaisis/internal/service/orchestrator"
 	"criaisis/internal/service/tenant"
 	"criaisis/internal/service/warroom"
+	"criaisis/internal/telemetry"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -122,6 +123,7 @@ func (s *Service) Open(ctx context.Context, in NewIncidentInput) (*entity.Incide
 func (s *Service) HandleJob(ctx context.Context, j job.IncidentJob) error {
 	err := s.handleJob(ctx, j)
 	if err != nil {
+		telemetry.ObserveInvestigation("failed", 0)
 		s.markFailed(ctx, j)
 	}
 	return err
@@ -153,6 +155,7 @@ func (s *Service) handleJob(ctx context.Context, j job.IncidentJob) error {
 	}
 	if inc.Status().IsResolved() {
 		s.log.Info().Str("incident_id", inc.ID().String()).Msg("skipping clash: incident already resolved")
+		telemetry.ObserveInvestigation("skipped", 0)
 		return nil
 	}
 
@@ -163,6 +166,7 @@ func (s *Service) handleJob(ctx context.Context, j job.IncidentJob) error {
 	if err != nil {
 		if errors.Is(err, tenant.ErrNotConfigured) {
 			s.log.Warn().Err(err).Str("incident_id", inc.ID().String()).Msg("skipping clash: workspace setup incomplete")
+			telemetry.ObserveInvestigation("failed", 0)
 			s.markFailed(ctx, j)
 			return nil // retrying cannot help until the tenant finishes setup
 		}
@@ -185,6 +189,7 @@ func (s *Service) handleJob(ctx context.Context, j job.IncidentJob) error {
 		Dur("elapsed", time.Since(started)).
 		Msg("clash complete")
 
+	telemetry.ObserveInvestigation("ok", time.Since(started))
 	return s.deliver(ctx, runtime, room, inc, result, time.Since(started))
 }
 

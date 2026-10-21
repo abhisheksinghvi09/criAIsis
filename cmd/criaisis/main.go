@@ -25,6 +25,7 @@ import (
 	"criaisis/internal/service/sandbox"
 	"criaisis/internal/service/tenant"
 	"criaisis/internal/service/warroom"
+	"criaisis/internal/telemetry"
 
 	"github.com/rs/zerolog"
 )
@@ -66,6 +67,9 @@ func main() {
 	}
 
 	repos := newRepositories(srv)
+	if q, ok := srv.Queue.(interface{ Depth() int }); ok {
+		telemetry.RegisterQueueDepth(q.Depth)
+	}
 	resolver := tenant.NewResolver(repos.settings, cipher)
 	buildOrch := buildOrchestrator(repos, srv.Logger)
 	slackAPI := slack.NewClient(nil)

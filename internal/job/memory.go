@@ -64,6 +64,9 @@ func (q *MemoryQueue) Enqueue(job IncidentJob) error {
 	}
 }
 
+// Depth reports how many jobs are waiting for a worker.
+func (q *MemoryQueue) Depth() int { return len(q.jobs) }
+
 // Start launches the worker pool.
 func (q *MemoryQueue) Start(ctx context.Context, handler Handler) {
 	for i := 0; i < q.workers; i++ {

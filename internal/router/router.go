@@ -7,6 +7,7 @@ import (
 
 	"criaisis/internal/handler"
 	"criaisis/internal/server"
+	"criaisis/internal/telemetry"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -36,6 +37,7 @@ func New(srv *server.Server, h Handlers) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
+	r.Use(telemetry.Middleware(srv.Logger))
 	// Deliberately no middleware.RealIP: it is a spoofable trust-on-faith rewrite
 	// of r.RemoteAddr from client-supplied headers (GHSA-3fxj-6jh8-hvhx), and
 	// nothing in this codebase reads RemoteAddr, so it bought nothing but the risk.
@@ -46,6 +48,9 @@ func New(srv *server.Server, h Handlers) http.Handler {
 
 	r.Get("/healthz", h.Health.Live)
 	r.Get("/readyz", h.Health.Ready)
+	if token := srv.Config.Server.MetricsToken; token != "" {
+		r.Method(http.MethodGet, "/metrics", telemetry.Handler(token))
+	}
 
 	// Inbound Slack surface (OAuth, Slash Commands, Interactivity, Events API)
 	if h.SlackInbound != nil {
