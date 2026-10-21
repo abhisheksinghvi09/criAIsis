@@ -89,6 +89,7 @@ func New(srv *server.Server, h Handlers) http.Handler {
 				one.Put("/llm", h.Workspace.SetLLM)
 				one.Put("/embeddings", h.Workspace.SetEmbeddings)
 				one.Put("/notifications", h.Workspace.SetNotifications)
+				one.Put("/oncall", h.Workspace.SetOnCall)
 				one.Post("/notifications/test", h.Workspace.TestNotification)
 				one.Post("/test-investigation", h.Workspace.RunTestInvestigation)
 				one.Post("/alert-token/rotate", h.Workspace.RotateAlertToken)

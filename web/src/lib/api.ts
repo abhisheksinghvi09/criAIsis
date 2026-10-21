@@ -90,6 +90,9 @@ export const api = {
   setEmbeddings: (c: Credentials, body: { api_key: string; model?: string; base_url?: string }) =>
     request<SaveResult>(c, "/embeddings", { method: "PUT", body: JSON.stringify(body) }),
 
+  setOnCall: (c: Credentials, body: { provider: string; api_key?: string; schedule_id?: string }) =>
+    request<SaveResult>(c, "/oncall", { method: "PUT", body: JSON.stringify(body) }),
+
   setNotifications: (c: Credentials, body: { provider: string; webhook_url?: string }) =>
     request<SaveResult>(c, "/notifications", { method: "PUT", body: JSON.stringify(body) }),
 

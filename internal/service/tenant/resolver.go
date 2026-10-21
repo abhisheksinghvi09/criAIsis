@@ -129,7 +129,7 @@ func (r *Resolver) notifierFor(s *entity.WorkspaceSettings) (notify.Notifier, er
 	if err != nil {
 		return nil, err
 	}
-	if provider == notify.ProviderNone {
+	if provider == notify.ProviderNone || provider == notify.ProviderSlackBot {
 		return notify.Discard{}, nil
 	}
 

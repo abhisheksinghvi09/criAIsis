@@ -69,6 +69,14 @@ func (m *mockIncidentRepo) ListActive(ctx context.Context, wsID value.WorkspaceI
 	return list, nil
 }
 
+func (m *mockIncidentRepo) GetLatestByChannel(ctx context.Context, wsID value.WorkspaceID, ch value.SlackChannelID) (*entity.Incident, error) {
+	for _, inc := range m.incidents {
+		if inc.WorkspaceID() == wsID && inc.SlackChannelID() == ch {
+			return inc, nil
+		}
+	}
+	return nil, nil
+}
 func (m *mockIncidentRepo) ListRecent(ctx context.Context, wsID value.WorkspaceID, limit, offset int) ([]*entity.Incident, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

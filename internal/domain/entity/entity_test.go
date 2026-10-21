@@ -313,3 +313,26 @@ func TestWorkspace_WebhookSecret(t *testing.T) {
 		t.Error("the rotated secret does not verify")
 	}
 }
+
+func TestWorkspaceSettings_SlackBotNeedsNoWebhookAndOnCallNeedsKeyAndSchedule(t *testing.T) {
+	s, err := NewWorkspaceSettings(value.NewWorkspaceID(), SettingsDefaults{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetNotificationTarget("slack_bot", nil); err != nil || !s.UsesIncidentChannels() {
+		t.Errorf("slack_bot without a webhook: err=%v channels=%v", err, s.UsesIncidentChannels())
+	}
+	if err := s.SetNotificationTarget("slack", nil); err == nil {
+		t.Error("slack webhook provider accepted without a url")
+	}
+
+	if err := s.SetOnCall("pagerduty", []byte("sealed"), " "); err == nil {
+		t.Error("on-call accepted without a schedule id")
+	}
+	if err := s.SetOnCall("pagerduty", []byte("sealed"), "P123"); err != nil || s.OnCallScheduleID() != "P123" {
+		t.Errorf("valid on-call rejected: %v", err)
+	}
+	if err := s.SetOnCall("none", []byte("x"), "P123"); err != nil || len(s.OnCallAPIKeyEncrypted()) != 0 || s.OnCallScheduleID() != "" {
+		t.Errorf("clearing on-call left data behind: %v", err)
+	}
+}

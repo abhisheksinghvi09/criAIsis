@@ -63,6 +63,14 @@ func (m *memIncidents) GetBySlackThread(_ context.Context, ws value.WorkspaceID,
 func (m *memIncidents) ListActive(context.Context, value.WorkspaceID, int, int) ([]*entity.Incident, error) {
 	return nil, nil
 }
+func (m *memIncidents) GetLatestByChannel(_ context.Context, ws value.WorkspaceID, ch value.SlackChannelID) (*entity.Incident, error) {
+	for i := len(m.created) - 1; i >= 0; i-- {
+		if inc := m.created[i]; inc.WorkspaceID() == ws && inc.SlackChannelID() == ch {
+			return inc, nil
+		}
+	}
+	return nil, errors.New("not found")
+}
 func (m *memIncidents) ListRecent(context.Context, value.WorkspaceID, int, int) ([]*entity.Incident, error) {
 	return nil, nil
 }

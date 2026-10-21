@@ -80,6 +80,17 @@ func (m *mockSlackClient) PostEphemeral(ctx context.Context, token, channel, use
 	return nil
 }
 
+func (m *mockSlackClient) PostPayload(context.Context, string, map[string]any) (string, error) {
+	return "1700000000.000100", nil
+}
+func (m *mockSlackClient) CreatePrivateChannel(context.Context, string, string) (string, error) {
+	return "C_INC", nil
+}
+func (m *mockSlackClient) InviteUser(context.Context, string, string, string) error { return nil }
+func (m *mockSlackClient) LookupUserByEmail(context.Context, string, string) (string, error) {
+	return "U_LOOKED_UP", nil
+}
+
 type mockQueue struct{}
 
 func (q *mockQueue) Enqueue(j job.IncidentJob) error { return nil }

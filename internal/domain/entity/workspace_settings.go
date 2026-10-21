@@ -30,6 +30,10 @@ type WorkspaceSettings struct {
 	notifyProvider         string
 	notifyWebhookEncrypted []byte
 
+	oncallProvider        string
+	oncallAPIKeyEncrypted []byte
+	oncallScheduleID      string
+
 	createdAt time.Time
 	updatedAt time.Time
 }
@@ -61,6 +65,7 @@ func NewWorkspaceSettings(workspaceID value.WorkspaceID, defaults SettingsDefaul
 		embeddingModel:    orDefault(defaults.EmbeddingModel, "text-embedding-3-small"),
 		embeddingBaseURL:  orDefault(defaults.EmbeddingBaseURL, "https://api.openai.com/v1"),
 		notifyProvider:    "none",
+		oncallProvider:    "none",
 		createdAt:         now,
 		updatedAt:         now,
 	}, nil
@@ -72,6 +77,7 @@ func ReconstituteWorkspaceSettings(
 	llmProvider string, llmKey []byte, specialistModel, synthesisModel string,
 	embeddingProvider string, embeddingKey []byte, embeddingModel, embeddingBaseURL string,
 	notifyProvider string, notifyWebhook []byte,
+	oncallProvider string, oncallKey []byte, oncallScheduleID string,
 	createdAt, updatedAt time.Time,
 ) *WorkspaceSettings {
 	return &WorkspaceSettings{
@@ -86,6 +92,9 @@ func ReconstituteWorkspaceSettings(
 		embeddingBaseURL:         embeddingBaseURL,
 		notifyProvider:           notifyProvider,
 		notifyWebhookEncrypted:   notifyWebhook,
+		oncallProvider:           oncallProvider,
+		oncallAPIKeyEncrypted:    oncallKey,
+		oncallScheduleID:         oncallScheduleID,
 		createdAt:                createdAt,
 		updatedAt:                updatedAt,
 	}
@@ -102,8 +111,16 @@ func (s *WorkspaceSettings) EmbeddingModel() string           { return s.embeddi
 func (s *WorkspaceSettings) EmbeddingBaseURL() string         { return s.embeddingBaseURL }
 func (s *WorkspaceSettings) NotifyProvider() string           { return s.notifyProvider }
 func (s *WorkspaceSettings) NotifyWebhookEncrypted() []byte   { return s.notifyWebhookEncrypted }
-func (s *WorkspaceSettings) CreatedAt() time.Time             { return s.createdAt }
-func (s *WorkspaceSettings) UpdatedAt() time.Time             { return s.updatedAt }
+func (s *WorkspaceSettings) OnCallProvider() string           { return s.oncallProvider }
+func (s *WorkspaceSettings) OnCallAPIKeyEncrypted() []byte    { return s.oncallAPIKeyEncrypted }
+func (s *WorkspaceSettings) OnCallScheduleID() string         { return s.oncallScheduleID }
+
+// UsesIncidentChannels reports whether verdicts go to a per-incident Slack
+// channel opened by the installed bot, rather than a webhook.
+func (s *WorkspaceSettings) UsesIncidentChannels() bool { return s.notifyProvider == "slack_bot" }
+
+func (s *WorkspaceSettings) CreatedAt() time.Time { return s.createdAt }
+func (s *WorkspaceSettings) UpdatedAt() time.Time { return s.updatedAt }
 
 // HasLLMKey reports whether the tenant has supplied a model credential.
 func (s *WorkspaceSettings) HasLLMKey() bool { return len(s.llmAPIKeyEncrypted) > 0 }
@@ -171,16 +188,36 @@ func (s *WorkspaceSettings) SetEmbeddings(provider string, encryptedKey []byte, 
 // SetNotificationTarget records where this tenant's investigations are posted.
 func (s *WorkspaceSettings) SetNotificationTarget(provider string, encryptedURL []byte) error {
 	switch provider {
-	case "none", "slack", "discord":
+	case "none", "slack", "discord", "slack_bot":
 	default:
 		return fmt.Errorf("unsupported notification provider %q", provider)
 	}
-	if provider != "none" && len(encryptedURL) == 0 {
+	if provider != "none" && provider != "slack_bot" && len(encryptedURL) == 0 {
 		return fmt.Errorf("provider %q requires a webhook url", provider)
 	}
 
 	s.notifyProvider = provider
 	s.notifyWebhookEncrypted = encryptedURL
+	s.updatedAt = time.Now().UTC()
+	return nil
+}
+
+// SetOnCall records where to look up who is on call. "none" clears it.
+func (s *WorkspaceSettings) SetOnCall(provider string, encryptedKey []byte, scheduleID string) error {
+	switch provider {
+	case "none":
+		encryptedKey, scheduleID = nil, ""
+	case "pagerduty", "opsgenie":
+		if len(encryptedKey) == 0 || strings.TrimSpace(scheduleID) == "" {
+			return fmt.Errorf("%s needs an api key and a schedule id", provider)
+		}
+	default:
+		return fmt.Errorf("unsupported on-call provider %q", provider)
+	}
+
+	s.oncallProvider = provider
+	s.oncallAPIKeyEncrypted = encryptedKey
+	s.oncallScheduleID = strings.TrimSpace(scheduleID)
 	s.updatedAt = time.Now().UTC()
 	return nil
 }

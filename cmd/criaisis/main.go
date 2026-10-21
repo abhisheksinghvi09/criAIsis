@@ -24,6 +24,7 @@ import (
 	"criaisis/internal/service/orchestrator"
 	"criaisis/internal/service/sandbox"
 	"criaisis/internal/service/tenant"
+	"criaisis/internal/service/warroom"
 
 	"github.com/rs/zerolog"
 )
@@ -67,7 +68,9 @@ func main() {
 	repos := newRepositories(srv)
 	resolver := tenant.NewResolver(repos.settings, cipher)
 	buildOrch := buildOrchestrator(repos, srv.Logger)
-	incidents := incident.New(repos.incidents, resolver, buildOrch, srv.Queue, srv.Logger)
+	slackAPI := slack.NewClient(nil)
+	incidents := incident.New(repos.incidents, resolver, buildOrch, srv.Queue, srv.Logger).
+		WithWarRoom(warroom.New(repos.workspaces, cipher, slackAPI, srv.Logger))
 
 	// The queue is in-memory, so anything still "investigating" from before this
 	// process started lost its job. Fail it visibly instead of leaving it hanging.
@@ -92,10 +95,9 @@ func main() {
 	if cfg.Slack.SigningSecret == "" {
 		logger.Warn().Msg("CRIAISIS_SLACK_SIGNING_SECRET is not set; the Slack surface is disabled")
 	} else {
-		slackClient := slack.NewClient(nil)
 		slackSig = handler.NewSlackSignatureMiddleware(cfg.Slack.SigningSecret, srv.Logger)
 		slackInbound = handler.NewSlackInboundHandler(
-			repos.workspaces, repos.incidents, incidents, resolver, buildOrch, cipher, slackClient,
+			repos.workspaces, repos.incidents, incidents, resolver, buildOrch, cipher, slackAPI,
 			handler.NewProvisioner(repos.workspaces, repos.settings, repos.personas, repos.tx, defaultsFrom(cfg)),
 			cfg.Slack.ClientID, cfg.Slack.ClientSecret, srv.Logger,
 		)

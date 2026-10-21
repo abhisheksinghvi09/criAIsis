@@ -20,6 +20,10 @@ type IncidentRepository interface {
 	// GetBySlackThread finds an active incident mapped to a specific Slack channel and thread timestamp.
 	GetBySlackThread(ctx context.Context, wsID value.WorkspaceID, channelID value.SlackChannelID, threadTS value.SlackThreadTS) (*entity.Incident, error)
 
+	// GetLatestByChannel finds the most recent incident hosted in a Slack channel, for
+	// follow-ups that arrive without a thread (a per-incident war-room channel).
+	GetLatestByChannel(ctx context.Context, wsID value.WorkspaceID, channelID value.SlackChannelID) (*entity.Incident, error)
+
 	// ListActive returns currently investigating incidents for the dashboard, filtered by status.
 	ListActive(ctx context.Context, wsID value.WorkspaceID, limit, offset int) ([]*entity.Incident, error)
 

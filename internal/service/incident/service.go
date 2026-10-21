@@ -12,9 +12,11 @@ import (
 	"criaisis/internal/domain/entity"
 	"criaisis/internal/domain/repository"
 	"criaisis/internal/domain/value"
+	"criaisis/internal/infrastructure/notify"
 	"criaisis/internal/job"
 	"criaisis/internal/service/orchestrator"
 	"criaisis/internal/service/tenant"
+	"criaisis/internal/service/warroom"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -29,12 +31,19 @@ const clashTimeout = 90 * time.Second
 // service does not need to know how the engine is assembled.
 type BuildOrchestrator func(*tenant.Runtime) *orchestrator.Orchestrator
 
+// WarRoom opens a per-incident Slack channel and posts the verdict into it.
+type WarRoom interface {
+	Open(ctx context.Context, inc *entity.Incident, settings *entity.WorkspaceSettings) (*warroom.Room, error)
+	PostVerdict(ctx context.Context, room *warroom.Room, report notify.Report) error
+}
+
 // Service owns incident creation, clash execution, and delivery of the verdict.
 type Service struct {
 	incidents repository.IncidentRepository
 	resolver  *tenant.Resolver
 	build     BuildOrchestrator
 	queue     job.Queue
+	warRoom   WarRoom
 	log       *zerolog.Logger
 }
 
@@ -47,6 +56,12 @@ func New(
 	log *zerolog.Logger,
 ) *Service {
 	return &Service{incidents: incidents, resolver: resolver, build: build, queue: queue, log: log}
+}
+
+// WithWarRoom enables per-incident Slack channels for tenants that choose them.
+func (s *Service) WithWarRoom(w WarRoom) *Service {
+	s.warRoom = w
+	return s
 }
 
 // NewIncidentInput describes an incident to open, from either ingress path.
@@ -154,6 +169,8 @@ func (s *Service) handleJob(ctx context.Context, j job.IncidentJob) error {
 		return fmt.Errorf("resolving workspace credentials: %w", err)
 	}
 
+	room := s.openRoom(ctx, runtime, inc)
+
 	started := time.Now()
 	result, err := s.build(runtime).RunClash(ctx, inc)
 	if err != nil {
@@ -168,15 +185,42 @@ func (s *Service) handleJob(ctx context.Context, j job.IncidentJob) error {
 		Dur("elapsed", time.Since(started)).
 		Msg("clash complete")
 
-	return s.deliver(ctx, runtime, inc, result, time.Since(started))
+	return s.deliver(ctx, runtime, room, inc, result, time.Since(started))
+}
+
+// openRoom creates the incident's Slack channel when the tenant uses them and
+// points the incident at it, so replies there reach this incident. A failure is
+// logged and returns nil: the transcript is still durable in the dashboard.
+func (s *Service) openRoom(ctx context.Context, runtime *tenant.Runtime, inc *entity.Incident) *warroom.Room {
+	if s.warRoom == nil || !runtime.Settings.UsesIncidentChannels() {
+		return nil
+	}
+	room, err := s.warRoom.Open(ctx, inc, runtime.Settings)
+	if err != nil {
+		s.log.Error().Err(err).Str("incident_id", inc.ID().String()).Msg("could not open incident channel")
+		return nil
+	}
+	if err := inc.MoveToSlackThread(value.SlackChannelID(room.ChannelID), value.SlackThreadTS(room.ThreadTS)); err == nil {
+		if err := s.incidents.Update(ctx, inc); err != nil {
+			s.log.Error().Err(err).Str("incident_id", inc.ID().String()).Msg("could not record incident channel")
+		}
+	}
+	return room
 }
 
 // deliver posts the finished investigation to the tenant's channel.
 //
 // A delivery failure is logged but not returned: the transcript is already durable,
 // and failing the job would re-run four model calls to fix a broken webhook URL.
-func (s *Service) deliver(ctx context.Context, runtime *tenant.Runtime, inc *entity.Incident, result *orchestrator.ClashResult, elapsed time.Duration) error {
-	if err := runtime.Notifier.Notify(ctx, buildReport(inc, result, elapsed)); err != nil {
+func (s *Service) deliver(ctx context.Context, runtime *tenant.Runtime, room *warroom.Room, inc *entity.Incident, result *orchestrator.ClashResult, elapsed time.Duration) error {
+	report := buildReport(inc, result, elapsed)
+	var err error
+	if room != nil {
+		err = s.warRoom.PostVerdict(ctx, room, report)
+	} else {
+		err = runtime.Notifier.Notify(ctx, report)
+	}
+	if err != nil {
 		s.log.Error().Err(err).Str("incident_id", inc.ID().String()).Msg("could not deliver investigation")
 		return nil
 	}

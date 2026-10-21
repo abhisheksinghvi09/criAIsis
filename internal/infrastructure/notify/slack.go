@@ -30,6 +30,12 @@ func NewSlack(webhookURL string) (*Slack, error) {
 
 // Notify posts the report as a Block Kit attachment with a severity stripe.
 func (s *Slack) Notify(ctx context.Context, report Report) error {
+	return post(ctx, s.client, s.webhookURL, SlackPayload(report))
+}
+
+// SlackPayload renders the report as a chat.postMessage / webhook body. It is
+// shared by the webhook notifier and the per-incident channel delivery.
+func SlackPayload(report Report) map[string]any {
 	color, _ := severityColor(report.Severity)
 
 	blocks := []any{
@@ -61,11 +67,11 @@ func (s *Slack) Notify(ctx context.Context, report Report) error {
 		}},
 	})
 
-	return post(ctx, s.client, s.webhookURL, map[string]any{
+	return map[string]any{
 		// text is the notification preview and the accessibility fallback.
 		"text":        slackEscape(report.IncidentTitle + " — " + report.headline()),
 		"attachments": []any{map[string]any{"color": color, "blocks": blocks}},
-	})
+	}
 }
 
 // appendSlackList adds a bulleted section when it has content.
@@ -120,3 +126,6 @@ func appendSlackSpecialists(blocks []any, specialists []SpecialistSummary) []any
 // slackEscape neutralises Slack's control characters. Alert titles and model
 // output are untrusted, and an unescaped "<!channel>" would page the channel.
 var slackEscape = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace
+
+// SlackEscape neutralises Slack control characters in untrusted text.
+var SlackEscape = slackEscape

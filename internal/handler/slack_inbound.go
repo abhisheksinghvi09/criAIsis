@@ -75,8 +75,9 @@ func NewSlackInboundHandler(
 const (
 	oauthStateCookie = "criaisis_oauth_state"
 	oauthStateTTL    = 10 * time.Minute
-	// slackScopes are what the bot needs: slash commands, replying, and @mentions.
-	slackScopes = "commands,chat:write,app_mentions:read"
+	// slackScopes are what the bot needs: slash commands, replying, @mentions, and
+	// opening a private channel per incident and finding on-call people by email.
+	slackScopes = "commands,chat:write,app_mentions:read,groups:write,users:read,users:read.email"
 )
 
 // HandleInstall starts the OAuth flow. It issues a signed, short-lived state and
@@ -524,15 +525,19 @@ func (h *SlackInboundHandler) handleAppMention(
 			h.log.Error().Err(err).Str("channel_id", channelID).Msg("app_mention: invalid slack channel id")
 			return
 		}
-		tTS, err := value.ParseSlackThreadTS(threadTS)
-		if err != nil {
-			h.log.Error().Err(err).Str("thread_ts", threadTS).Msg("app_mention: invalid slack thread timestamp")
-			return
-		}
 
-		inc, err := h.incidents.GetBySlackThread(bgCtx, ws.ID(), chanID, tTS)
-		if err != nil || inc == nil {
-			h.log.Warn().Str("thread_ts", threadTS).Msg("incident not found for thread follow-up")
+		// A reply in an incident's thread matches on (channel, thread). A top-level
+		// mention in a per-incident war-room channel has no thread, so it falls back
+		// to the channel's latest incident.
+		var inc *entity.Incident
+		if tTS, perr := value.ParseSlackThreadTS(threadTS); perr == nil {
+			inc, _ = h.incidents.GetBySlackThread(bgCtx, ws.ID(), chanID, tTS)
+		}
+		if inc == nil {
+			inc, _ = h.incidents.GetLatestByChannel(bgCtx, ws.ID(), chanID)
+		}
+		if inc == nil {
+			h.log.Warn().Str("channel_id", channelID).Str("thread_ts", threadTS).Msg("incident not found for follow-up")
 			return
 		}
 

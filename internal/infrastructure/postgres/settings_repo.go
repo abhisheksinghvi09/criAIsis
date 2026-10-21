@@ -19,6 +19,7 @@ const settingsColumns = `workspace_id,
 	llm_provider, llm_api_key_encrypted, llm_specialist_model, llm_synthesis_model,
 	embedding_provider, embedding_api_key_encrypted, embedding_model, embedding_base_url,
 	notify_provider, notify_webhook_url_encrypted,
+	oncall_provider, oncall_api_key_encrypted, oncall_schedule_id,
 	created_at, updated_at`
 
 // PostgresSettingsRepository stores per-tenant integration credentials.
@@ -37,7 +38,7 @@ func NewSettingsRepository(pool *pgxpool.Pool) *PostgresSettingsRepository {
 func (r *PostgresSettingsRepository) Create(ctx context.Context, s *entity.WorkspaceSettings) error {
 	const query = `
 		INSERT INTO workspace_settings (` + settingsColumns + `)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16);
 	`
 	exec := GetExecutor(ctx, r.pool)
 	_, err := exec.Exec(ctx, query,
@@ -45,6 +46,7 @@ func (r *PostgresSettingsRepository) Create(ctx context.Context, s *entity.Works
 		s.LLMProvider(), s.LLMAPIKeyEncrypted(), s.SpecialistModel(), s.SynthesisModel(),
 		s.EmbeddingProvider(), s.EmbeddingAPIKeyEncrypted(), s.EmbeddingModel(), s.EmbeddingBaseURL(),
 		s.NotifyProvider(), s.NotifyWebhookEncrypted(),
+		s.OnCallProvider(), s.OnCallAPIKeyEncrypted(), s.OnCallScheduleID(),
 		s.CreatedAt(), s.UpdatedAt(),
 	)
 	if err != nil {
@@ -70,7 +72,8 @@ func (r *PostgresSettingsRepository) Update(ctx context.Context, s *entity.Works
 			embedding_provider = $6, embedding_api_key_encrypted = $7,
 			embedding_model = $8, embedding_base_url = $9,
 			notify_provider = $10, notify_webhook_url_encrypted = $11,
-			updated_at = $12
+			oncall_provider = $12, oncall_api_key_encrypted = $13, oncall_schedule_id = $14,
+			updated_at = $15
 		WHERE workspace_id = $1;
 	`
 	exec := GetExecutor(ctx, r.pool)
@@ -79,6 +82,7 @@ func (r *PostgresSettingsRepository) Update(ctx context.Context, s *entity.Works
 		s.LLMProvider(), s.LLMAPIKeyEncrypted(), s.SpecialistModel(), s.SynthesisModel(),
 		s.EmbeddingProvider(), s.EmbeddingAPIKeyEncrypted(), s.EmbeddingModel(), s.EmbeddingBaseURL(),
 		s.NotifyProvider(), s.NotifyWebhookEncrypted(),
+		s.OnCallProvider(), s.OnCallAPIKeyEncrypted(), s.OnCallScheduleID(),
 		s.UpdatedAt(),
 	)
 	if err != nil {
@@ -100,6 +104,8 @@ func scanSettings(row pgx.Row) (*entity.WorkspaceSettings, error) {
 		embeddingKey                                 []byte
 		notifyProvider                               string
 		notifyWebhook                                []byte
+		oncallProvider, oncallSchedule               string
+		oncallKey                                    []byte
 		createdAt, updatedAt                         time.Time
 	)
 
@@ -108,6 +114,7 @@ func scanSettings(row pgx.Row) (*entity.WorkspaceSettings, error) {
 		&llmProvider, &llmKey, &specialistModel, &synthesisModel,
 		&embeddingProvider, &embeddingKey, &embeddingModel, &baseURL,
 		&notifyProvider, &notifyWebhook,
+		&oncallProvider, &oncallKey, &oncallSchedule,
 		&createdAt, &updatedAt,
 	); err != nil {
 		return nil, fmt.Errorf("scanning workspace settings: %w", err)
@@ -123,6 +130,7 @@ func scanSettings(row pgx.Row) (*entity.WorkspaceSettings, error) {
 		llmProvider, llmKey, specialistModel, synthesisModel,
 		embeddingProvider, embeddingKey, embeddingModel, baseURL,
 		notifyProvider, notifyWebhook,
+		oncallProvider, oncallKey, oncallSchedule,
 		createdAt, updatedAt,
 	), nil
 }

@@ -145,6 +145,17 @@ func (i *Incident) UpdateSeverity(severity value.Severity) error {
 	return nil
 }
 
+// MoveToSlackThread points the incident at the Slack channel and thread that now
+// host it, when the war room is created after the incident was opened.
+func (i *Incident) MoveToSlackThread(channel value.SlackChannelID, thread value.SlackThreadTS) error {
+	if channel == "" || thread == "" {
+		return errors.New("slack channel and thread are required")
+	}
+	i.slackChannelID, i.slackThreadTS = channel, thread
+	i.updatedAt = time.Now().UTC()
+	return nil
+}
+
 // Resolve formally transitions the incident to resolved, locking the resolution timestamp.
 // If already resolved, it returns ErrIncidentAlreadyResolved to protect lifecycle invariants.
 func (i *Incident) Resolve(resolvedAt time.Time) error {

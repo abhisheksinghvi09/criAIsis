@@ -77,6 +77,19 @@ func (r *PostgresIncidentRepository) GetBySlackThread(ctx context.Context, wsID 
 	return r.scanIncident(exec.QueryRow(ctx, query, wsID.UUID(), channelID.String(), threadTS.String()))
 }
 
+func (r *PostgresIncidentRepository) GetLatestByChannel(ctx context.Context, wsID value.WorkspaceID, channelID value.SlackChannelID) (*entity.Incident, error) {
+	const query = `
+		SELECT id, workspace_id, title, description, slack_channel_id, slack_thread_ts,
+		       severity, status, created_by_slack_user_id, metadata, resolved_at, created_at, updated_at
+		FROM incidents
+		WHERE workspace_id = $1 AND slack_channel_id = $2
+		ORDER BY created_at DESC
+		LIMIT 1;
+	`
+	exec := GetExecutor(ctx, r.pool)
+	return r.scanIncident(exec.QueryRow(ctx, query, wsID.UUID(), channelID.String()))
+}
+
 func (r *PostgresIncidentRepository) ListActive(ctx context.Context, wsID value.WorkspaceID, limit, offset int) ([]*entity.Incident, error) {
 	if limit <= 0 {
 		limit = 20
@@ -140,7 +153,9 @@ func (r *PostgresIncidentRepository) Update(ctx context.Context, inc *entity.Inc
 		    status = $4,
 		    metadata = $5,
 		    resolved_at = $6,
-		    updated_at = $7
+		    updated_at = $7,
+		    slack_channel_id = $8,
+		    slack_thread_ts = $9
 		WHERE workspace_id = $1 AND id = $2;
 	`
 	exec := GetExecutor(ctx, r.pool)
@@ -152,6 +167,8 @@ func (r *PostgresIncidentRepository) Update(ctx context.Context, inc *entity.Inc
 		inc.Metadata(),
 		inc.ResolvedAt(),
 		inc.UpdatedAt(),
+		inc.SlackChannelID().String(),
+		inc.SlackThreadTS().String(),
 	)
 	if err != nil {
 		return fmt.Errorf("updating incident: %w", err)

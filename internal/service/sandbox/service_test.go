@@ -93,6 +93,9 @@ func (m *mockIncidentRepo) ListActive(ctx context.Context, wsID value.WorkspaceI
 	return nil, nil
 }
 
+func (m *mockIncidentRepo) GetLatestByChannel(context.Context, value.WorkspaceID, value.SlackChannelID) (*entity.Incident, error) {
+	return nil, nil
+}
 func (m *mockIncidentRepo) ListRecent(ctx context.Context, wsID value.WorkspaceID, limit, offset int) ([]*entity.Incident, error) {
 	return nil, nil
 }

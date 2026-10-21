@@ -12,10 +12,12 @@ import (
 	"criaisis/internal/domain/value"
 	"criaisis/internal/infrastructure/crypto"
 	"criaisis/internal/infrastructure/llm"
+	"criaisis/internal/infrastructure/notify"
 	"criaisis/internal/job"
 	"criaisis/internal/service/incident"
 	"criaisis/internal/service/orchestrator"
 	"criaisis/internal/service/tenant"
+	"criaisis/internal/service/warroom"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -52,6 +54,9 @@ func (r *fakeIncidentRepo) GetBySlackThread(context.Context, value.WorkspaceID, 
 }
 func (r *fakeIncidentRepo) ListActive(context.Context, value.WorkspaceID, int, int) ([]*entity.Incident, error) {
 	return nil, nil
+}
+func (r *fakeIncidentRepo) GetLatestByChannel(context.Context, value.WorkspaceID, value.SlackChannelID) (*entity.Incident, error) {
+	return nil, errors.New("not implemented")
 }
 func (r *fakeIncidentRepo) ListRecent(context.Context, value.WorkspaceID, int, int) ([]*entity.Incident, error) {
 	return nil, nil
@@ -197,6 +202,11 @@ func jsonChat() llm.ChatFunc {
 }
 
 func newTestService(t *testing.T, queue job.Queue, chat llm.ChatProvider) (*incident.Service, value.WorkspaceID) {
+	return newTestServiceWith(t, queue, chat, nil)
+}
+
+// newTestServiceWith lets a test adjust the tenant's settings before wiring.
+func newTestServiceWith(t *testing.T, queue job.Queue, chat llm.ChatProvider, mutate func(*entity.WorkspaceSettings)) (*incident.Service, value.WorkspaceID) {
 	t.Helper()
 
 	wsID := value.NewWorkspaceID()
@@ -213,6 +223,9 @@ func newTestService(t *testing.T, queue job.Queue, chat llm.ChatProvider) (*inci
 	_ = settings.SetLLM("anthropic", llmKey, "claude-opus-5", "claude-opus-5")
 	embedKey, _ := cipher.Encrypt("sk-embed-key")
 	_ = settings.SetEmbeddings("openai", embedKey, "text-embedding-3-small", "https://api.openai.com/v1")
+	if mutate != nil {
+		mutate(settings)
+	}
 	_ = settingsRepo.Create(context.Background(), settings)
 
 	resolver := tenant.NewResolver(settingsRepo, cipher)
@@ -429,5 +442,48 @@ func TestHandleJob_FailedClashMarksTheIncidentFailed(t *testing.T) {
 	}
 	if got := opened.Status(); got != value.IncidentStatusFailed {
 		t.Errorf("status = %s, want failed", got)
+	}
+}
+
+type fakeWarRoom struct {
+	opened int
+	posted int
+}
+
+func (f *fakeWarRoom) Open(context.Context, *entity.Incident, *entity.WorkspaceSettings) (*warroom.Room, error) {
+	f.opened++
+	return &warroom.Room{ChannelID: "C_ROOM", ThreadTS: "1700.0001"}, nil
+}
+
+func (f *fakeWarRoom) PostVerdict(context.Context, *warroom.Room, notify.Report) error {
+	f.posted++
+	return nil
+}
+
+func TestHandleJob_UsesTheIncidentChannelWhenTheTenantChoosesIt(t *testing.T) {
+	svc, wsID := newTestServiceWith(t, &mockQueue{}, jsonChat(), func(s *entity.WorkspaceSettings) {
+		_ = s.SetNotificationTarget("slack_bot", nil)
+	})
+	room := &fakeWarRoom{}
+	svc.WithWarRoom(room)
+
+	opened, err := svc.Open(context.Background(), incident.NewIncidentInput{
+		WorkspaceID: wsID, Title: "DB errors", Description: "connections exhausted",
+		Severity: value.SeveritySev1, Trigger: value.TriggerTypeWebhook,
+		ChannelID: value.SlackChannelID("C_UNROUTED"), ThreadTS: value.SlackThreadTS("wh-1"),
+		CreatedBy: value.SlackUserID("U_WEBHOOK"),
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := svc.HandleJob(context.Background(), job.IncidentJob{WorkspaceID: wsID, IncidentID: opened.ID()}); err != nil {
+		t.Fatalf("HandleJob: %v", err)
+	}
+
+	if room.opened != 1 || room.posted != 1 {
+		t.Errorf("opened=%d posted=%d, want 1 and 1", room.opened, room.posted)
+	}
+	if opened.SlackChannelID() != "C_ROOM" || opened.SlackThreadTS() != "1700.0001" {
+		t.Errorf("incident not moved to its channel: %s %s", opened.SlackChannelID(), opened.SlackThreadTS())
 	}
 }

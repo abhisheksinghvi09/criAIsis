@@ -160,3 +160,39 @@ func TestPostMessage_OKFalseIsAnError(t *testing.T) {
 		t.Errorf("expected a not_in_channel error, got %v", err)
 	}
 }
+
+func TestWarRoomCalls_ParseIdsAndSendEmailAsForm(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/conversations.create":
+			_, _ = w.Write([]byte(`{"ok":true,"channel":{"id":"C0INC"}}`))
+		case "/users.lookupByEmail":
+			if ct := r.Header.Get("Content-Type"); ct != "application/x-www-form-urlencoded" {
+				t.Errorf("lookupByEmail content type = %q, want form", ct)
+			}
+			_ = r.ParseForm()
+			if r.Form.Get("email") != "a@b.co" {
+				t.Errorf("email = %q", r.Form.Get("email"))
+			}
+			_, _ = w.Write([]byte(`{"ok":true,"user":{"id":"U0ABC"}}`))
+		case "/chat.postMessage":
+			_, _ = w.Write([]byte(`{"ok":true,"ts":"1700.0002"}`))
+		default:
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		}
+	})
+	ctx := context.Background()
+
+	if id, err := c.CreatePrivateChannel(ctx, "tok", "inc-1"); err != nil || id != "C0INC" {
+		t.Errorf("CreatePrivateChannel = %q, %v", id, err)
+	}
+	if id, err := c.LookupUserByEmail(ctx, "tok", "a@b.co"); err != nil || id != "U0ABC" {
+		t.Errorf("LookupUserByEmail = %q, %v", id, err)
+	}
+	if err := c.InviteUser(ctx, "tok", "C0INC", "U0ABC"); err != nil {
+		t.Errorf("InviteUser: %v", err)
+	}
+	if ts, err := c.PostPayload(ctx, "tok", map[string]any{"channel": "C0INC", "text": "x"}); err != nil || ts != "1700.0002" {
+		t.Errorf("PostPayload = %q, %v", ts, err)
+	}
+}

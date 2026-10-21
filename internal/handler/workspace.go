@@ -14,6 +14,7 @@ import (
 	"criaisis/internal/infrastructure/crypto"
 	"criaisis/internal/infrastructure/llm"
 	"criaisis/internal/infrastructure/notify"
+	"criaisis/internal/infrastructure/oncall"
 	"criaisis/internal/service/incident"
 	"criaisis/internal/service/tenant"
 
@@ -134,6 +135,11 @@ func (h *WorkspaceHandler) Show(w http.ResponseWriter, r *http.Request) {
 		"team_id":  ws.SlackTeamID(),
 		"name":     ws.SlackTeamName(),
 		"features": map[string]bool{"sandbox": h.sandbox},
+		"oncall": map[string]any{
+			"provider":    settings.OnCallProvider(),
+			"schedule_id": settings.OnCallScheduleID(),
+			"api_key_set": len(settings.OnCallAPIKeyEncrypted()) > 0,
+		},
 		"llm": map[string]any{
 			"provider":         settings.LLMProvider(),
 			"api_key_set":      settings.HasLLMKey(),
@@ -266,7 +272,8 @@ func (h *WorkspaceHandler) SetNotifications(w http.ResponseWriter, r *http.Reque
 	}
 
 	var sealed []byte
-	if provider != notify.ProviderNone {
+	// slack_bot posts through the installed app, so it has no webhook to validate.
+	if provider != notify.ProviderNone && provider != notify.ProviderSlackBot {
 		if _, err := notify.New(provider, req.WebhookURL); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
@@ -279,6 +286,58 @@ func (h *WorkspaceHandler) SetNotifications(w http.ResponseWriter, r *http.Reque
 
 	h.updateSettings(w, r, ws, "notification destination stored", func(s *entity.WorkspaceSettings) error {
 		return s.SetNotificationTarget(provider.String(), sealed)
+	})
+}
+
+type onCallRequest struct {
+	Provider   string `json:"provider"`
+	APIKey     string `json:"api_key"`
+	ScheduleID string `json:"schedule_id"`
+}
+
+// SetOnCall stores where to look up who is on call, after proving the key can
+// read the schedule. Those people are invited to each incident channel.
+func (h *WorkspaceHandler) SetOnCall(w http.ResponseWriter, r *http.Request) {
+	ws, _, ok := h.authenticated(w, r)
+	if !ok {
+		return
+	}
+
+	var req onCallRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	provider, err := oncall.ParseProvider(req.Provider)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	var sealed []byte
+	if provider != oncall.ProviderNone {
+		if req.APIKey == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "api_key is required"})
+			return
+		}
+		lister, err := oncall.New(provider, req.APIKey, req.ScheduleID)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		// Verify before storing, so a wrong key or schedule fails now, not mid-incident.
+		if _, err := lister.OnCallEmails(r.Context()); err != nil {
+			h.log.Warn().Err(err).Msg("on-call credential check failed")
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "the on-call credential or schedule was rejected"})
+			return
+		}
+		if sealed, err = h.cipher.Encrypt(req.APIKey); err != nil {
+			h.fail(w, "sealing on-call key", err)
+			return
+		}
+	}
+
+	h.updateSettings(w, r, ws, "on-call source stored", func(s *entity.WorkspaceSettings) error {
+		return s.SetOnCall(provider.String(), sealed, req.ScheduleID)
 	})
 }
 
@@ -317,8 +376,15 @@ func (h *WorkspaceHandler) RotateAlertToken(w http.ResponseWriter, r *http.Reque
 // TestNotification posts a sample message so a customer can confirm delivery
 // without waiting for a real outage.
 func (h *WorkspaceHandler) TestNotification(w http.ResponseWriter, r *http.Request) {
-	ws, _, ok := h.authenticated(w, r)
+	ws, settings, ok := h.authenticated(w, r)
 	if !ok {
+		return
+	}
+
+	if settings.UsesIncidentChannels() {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "this workspace posts to per-incident Slack channels; run the setup check to see one open",
+		})
 		return
 	}
 

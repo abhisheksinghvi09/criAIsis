@@ -18,6 +18,11 @@ const (
 	// ProviderSlack posts through a Slack incoming webhook.
 	ProviderSlack Provider = "slack"
 
+	// ProviderSlackBot delivers through the installed Slack bot into a channel it
+	// creates per incident. There is no webhook; the war-room service does the
+	// posting, so the notifier itself discards.
+	ProviderSlackBot Provider = "slack_bot"
+
 	// ProviderDiscord posts through a Discord webhook.
 	ProviderDiscord Provider = "discord"
 )
@@ -31,8 +36,10 @@ func ParseProvider(raw string) (Provider, error) {
 		return ProviderSlack, nil
 	case ProviderDiscord:
 		return ProviderDiscord, nil
+	case ProviderSlackBot:
+		return ProviderSlackBot, nil
 	default:
-		return "", fmt.Errorf("unsupported notification provider %q: expected none, slack or discord", raw)
+		return "", fmt.Errorf("unsupported notification provider %q: expected none, slack, discord or slack_bot", raw)
 	}
 }
 
@@ -51,7 +58,7 @@ func New(provider Provider, webhookURL string) (Notifier, error) {
 		return NewSlack(webhookURL)
 	case ProviderDiscord:
 		return NewDiscord(webhookURL)
-	case ProviderNone, "":
+	case ProviderNone, ProviderSlackBot, "":
 		return Discard{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported notification provider %q", provider)

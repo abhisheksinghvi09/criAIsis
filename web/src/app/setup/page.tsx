@@ -32,7 +32,7 @@ function Setup() {
         <div className="checklist">
           <Check done={s?.llm.api_key_set ?? false} label="Anthropic key" sub="runs the four specialists and the commander" />
           <Check done={s?.embeddings.api_key_set ?? false} label="Embeddings key" sub="indexes and retrieves your runbooks" />
-          <Check done={(s?.notifications.provider ?? "none") !== "none"} label="Slack or Discord webhook" sub="where finished investigations are posted" />
+          <Check done={(s?.notifications.provider ?? "none") !== "none"} label="Delivery destination" sub="where finished investigations are posted" />
         </div>
       </Card>
 
@@ -42,6 +42,8 @@ function Setup() {
       </div>
 
       <NotificationsForm settings={s} onSaved={settings.reload} />
+
+      {s?.notifications.provider === "slack_bot" ? <OnCallForm settings={s} onSaved={settings.reload} /> : null}
     </Shell>
   );
 }
@@ -236,9 +238,9 @@ function NotificationsForm({ settings, onSaved }: { settings: WorkspaceSettings 
   return (
     <Card
       title="Where investigations are posted"
-      description="An incoming webhook: no OAuth, no scopes, no app review."
+      description="Incident channels open a private Slack channel per incident through the installed app. Webhooks post to one fixed channel."
       actions={
-        settings?.notifications.webhook_set ? (
+        settings?.notifications.webhook_set && active !== "slack_bot" ? (
           <button
             className="btn secondary small"
             type="button"
@@ -262,7 +264,8 @@ function NotificationsForm({ settings, onSaved }: { settings: WorkspaceSettings 
             onChange={(e) => setProvider(e.target.value)}
           >
             <option value="none">None</option>
-            <option value="slack">Slack</option>
+            <option value="slack_bot">Slack: private channel per incident</option>
+            <option value="slack">Slack: incoming webhook</option>
             <option value="discord">Discord</option>
           </select>
         </div>
@@ -282,9 +285,13 @@ function NotificationsForm({ settings, onSaved }: { settings: WorkspaceSettings 
                   : "https://hooks.slack.com/services/..."
             }
             autoComplete="off"
-            disabled={active === "none"}
+            disabled={active === "none" || active === "slack_bot"}
           />
-          <span className="hint">Must be https and on the provider&apos;s own domain. Encrypted at rest.</span>
+          <span className="hint">
+            {active === "slack_bot"
+              ? "Not needed: the installed Slack app creates and posts to each incident channel."
+              : "Must be https and on the provider's own domain. Encrypted at rest."}
+          </span>
         </div>
       </div>
 
@@ -292,7 +299,7 @@ function NotificationsForm({ settings, onSaved }: { settings: WorkspaceSettings 
         <button
           className="btn primary"
           type="button"
-          disabled={busy || (active !== "none" && webhookURL.trim() === "")}
+          disabled={busy || (active !== "none" && active !== "slack_bot" && webhookURL.trim() === "")}
           onClick={() =>
             run(async () => {
               const result = await api.setNotifications(creds, {
@@ -306,6 +313,86 @@ function NotificationsForm({ settings, onSaved }: { settings: WorkspaceSettings 
           }
         >
           {busy ? "Saving..." : "Save destination"}
+        </button>
+      </div>
+    </Card>
+  );
+}
+
+function OnCallForm({ settings, onSaved }: { settings: WorkspaceSettings | null; onSaved: () => void }) {
+  const creds = useCredentials();
+  const { busy, message, run } = useSaver();
+  const [provider, setProvider] = useState<string>("");
+  const [apiKey, setApiKey] = useState("");
+  const [scheduleId, setScheduleId] = useState("");
+
+  const active = provider || settings?.oncall?.provider || "none";
+  const keySet = settings?.oncall?.api_key_set ?? false;
+
+  return (
+    <Card
+      title="Who gets invited"
+      description="Whoever is on call in your PagerDuty or Opsgenie schedule is invited to each incident channel. Matched to Slack by email."
+    >
+      <Notice message={message} />
+
+      <div className="row">
+        <div className="field" style={{ flex: 1, minWidth: 160 }}>
+          <label htmlFor="oncall-provider">On-call source</label>
+          <select id="oncall-provider" className="select" value={active} onChange={(e) => setProvider(e.target.value)}>
+            <option value="none">None (only the person who raised it)</option>
+            <option value="pagerduty">PagerDuty</option>
+            <option value="opsgenie">Opsgenie</option>
+          </select>
+        </div>
+        <div className="field" style={{ flex: 1, minWidth: 160 }}>
+          <label htmlFor="oncall-schedule">Schedule ID</label>
+          <input
+            id="oncall-schedule"
+            className="input mono"
+            value={scheduleId}
+            onChange={(e) => setScheduleId(e.target.value)}
+            placeholder={settings?.oncall?.schedule_id || "e.g. PABC123"}
+            disabled={active === "none"}
+          />
+        </div>
+        <div className="field" style={{ flex: 2, minWidth: 220 }}>
+          <label htmlFor="oncall-key">API key</label>
+          <input
+            id="oncall-key"
+            className="input mono"
+            type="password"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={keySet ? "stored — enter a new key to replace it" : "read-only API key"}
+            autoComplete="off"
+            disabled={active === "none"}
+          />
+          <span className="hint">Tested against the live schedule before it is stored. Encrypted at rest.</span>
+        </div>
+      </div>
+
+      <div className="row end">
+        <button
+          className="btn primary"
+          type="button"
+          disabled={busy || (active !== "none" && (apiKey.trim() === "" || (scheduleId.trim() === "" && !settings?.oncall?.schedule_id)))}
+          onClick={() =>
+            run(async () => {
+              const result = await api.setOnCall(creds, {
+                provider: active,
+                ...(active !== "none"
+                  ? { api_key: apiKey.trim(), schedule_id: scheduleId.trim() || settings?.oncall?.schedule_id }
+                  : {}),
+              });
+              setApiKey("");
+              setScheduleId("");
+              onSaved();
+              return result.status;
+            })
+          }
+        >
+          {busy ? "Verifying..." : "Verify and save"}
         </button>
       </div>
     </Card>
