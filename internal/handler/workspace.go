@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"criaisis/internal/domain/value"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 
 	"criaisis/internal/domain/entity"
 	"criaisis/internal/domain/repository"
@@ -152,7 +154,7 @@ type llmRequest struct {
 
 // SetLLM stores the tenant's own model credential, after proving it works.
 func (h *WorkspaceHandler) SetLLM(w http.ResponseWriter, r *http.Request) {
-	_, settings, ok := h.authenticated(w, r)
+	ws, settings, ok := h.authenticated(w, r)
 	if !ok {
 		return
 	}
@@ -183,11 +185,9 @@ func (h *WorkspaceHandler) SetLLM(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "sealing model key", err)
 		return
 	}
-	if err := settings.SetLLM("anthropic", sealed, specialist, synthesis); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	h.save(w, r, settings, "model credential verified and stored")
+	h.updateSettings(w, r, ws, "model credential verified and stored", func(s *entity.WorkspaceSettings) error {
+		return s.SetLLM("anthropic", sealed, specialist, synthesis)
+	})
 }
 
 type embeddingRequest struct {
@@ -199,7 +199,7 @@ type embeddingRequest struct {
 // SetEmbeddings stores the tenant's retrieval credential, after proving it works
 // and returns the dimension the schema requires.
 func (h *WorkspaceHandler) SetEmbeddings(w http.ResponseWriter, r *http.Request) {
-	_, settings, ok := h.authenticated(w, r)
+	ws, settings, ok := h.authenticated(w, r)
 	if !ok {
 		return
 	}
@@ -228,11 +228,9 @@ func (h *WorkspaceHandler) SetEmbeddings(w http.ResponseWriter, r *http.Request)
 		h.fail(w, "sealing embedding key", err)
 		return
 	}
-	if err := settings.SetEmbeddings("openai", sealed, opts.Model, opts.BaseURL); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	h.save(w, r, settings, "embedding credential verified and stored")
+	h.updateSettings(w, r, ws, "embedding credential verified and stored", func(s *entity.WorkspaceSettings) error {
+		return s.SetEmbeddings("openai", sealed, opts.Model, opts.BaseURL)
+	})
 }
 
 type notificationRequest struct {
@@ -242,7 +240,7 @@ type notificationRequest struct {
 
 // SetNotifications stores where this tenant's investigations are posted.
 func (h *WorkspaceHandler) SetNotifications(w http.ResponseWriter, r *http.Request) {
-	_, settings, ok := h.authenticated(w, r)
+	ws, _, ok := h.authenticated(w, r)
 	if !ok {
 		return
 	}
@@ -270,11 +268,9 @@ func (h *WorkspaceHandler) SetNotifications(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	if err := settings.SetNotificationTarget(provider.String(), sealed); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	h.save(w, r, settings, "notification destination stored")
+	h.updateSettings(w, r, ws, "notification destination stored", func(s *entity.WorkspaceSettings) error {
+		return s.SetNotificationTarget(provider.String(), sealed)
+	})
 }
 
 // RotateAlertToken issues a new ingestion credential, invalidating the previous one.
@@ -285,6 +281,14 @@ func (h *WorkspaceHandler) RotateAlertToken(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Re-read under the workspace lock: Update rewrites every column, so a copy
+	// loaded before a concurrent change would silently undo it.
+	defer lockWorkspace(ws.ID())()
+	ws, err := h.workspaces.GetByID(r.Context(), ws.ID())
+	if err != nil {
+		h.fail(w, "reloading workspace", err)
+		return
+	}
 	token, err := ws.GenerateWebhookSecret()
 	if err != nil {
 		h.fail(w, "rotating alert token", err)
@@ -350,6 +354,42 @@ func (h *WorkspaceHandler) authenticated(w http.ResponseWriter, r *http.Request)
 		return nil, nil, false
 	}
 	return ws, settings, true
+}
+
+// workspaceLocks serialises read-modify-write cycles on one tenant's rows.
+// ponytail: in-process only. With more than one replica, use SELECT ... FOR UPDATE
+// inside a transaction instead.
+var workspaceLocks sync.Map
+
+// lockWorkspace takes the tenant's lock and returns the function that releases it.
+func lockWorkspace(id value.WorkspaceID) func() {
+	mu, _ := workspaceLocks.LoadOrStore(id, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	return mu.(*sync.Mutex).Unlock
+}
+
+// updateSettings applies one change to a fresh copy of the tenant's settings.
+//
+// The handlers verify credentials against an external service first, which can
+// take many seconds. Writing back the copy loaded before that check would
+// overwrite anything saved meanwhile (the settings row is written whole), so the
+// row is re-read and modified only after the slow work is done.
+func (h *WorkspaceHandler) updateSettings(
+	w http.ResponseWriter, r *http.Request, ws *entity.Workspace, message string,
+	apply func(*entity.WorkspaceSettings) error,
+) {
+	defer lockWorkspace(ws.ID())()
+
+	settings, err := h.settings.Get(r.Context(), ws.ID())
+	if err != nil {
+		h.fail(w, "loading settings", err)
+		return
+	}
+	if err := apply(settings); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	h.save(w, r, settings, message)
 }
 
 // save persists settings and reports what remains before investigations can run.
