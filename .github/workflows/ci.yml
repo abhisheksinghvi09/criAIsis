@@ -34,7 +34,7 @@ jobs:
       CRIAISIS_DATABASE_USER: postgres
       CRIAISIS_DATABASE_PASSWORD: postgres
       CRIAISIS_DATABASE_NAME: criaisis
-      CRIAISIS_SECURITY_CREDENTIAL_ENCRYPTION_KEY: "ci-test-key-exactly-32-bytes-ok"
+      CRIAISIS_SECURITY_CREDENTIAL_ENCRYPTION_KEY: "ci-test-key-exactly-32-bytes-ok!"
       CRIAISIS_SECURITY_ADMIN_API_KEY: "ci-test-admin-key-not-a-real-secret"
       CRIAISIS_LLM_SPECIALIST_MODEL: claude-opus-5
       CRIAISIS_LLM_SYNTHESIS_MODEL: claude-opus-5
