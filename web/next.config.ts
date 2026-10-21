@@ -2,6 +2,8 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // Self-contained server bundle for the container image.
+  output: "standalone",
   // The dashboard talks to the Go API. In development the API runs on :8080 and
   // Next on :3000, so requests are proxied rather than made cross-origin: the
   // workspace admin key then never travels as a CORS preflight-exposed header.

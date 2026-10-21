@@ -115,3 +115,14 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+
+  images:
+    name: Container images
+    runs-on: ubuntu-latest
+    needs: [backend, web]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build API image
+        run: docker build -t criaisis-api:${{ github.sha }} .
+      - name: Build dashboard image
+        run: docker build -t criaisis-web:${{ github.sha }} web

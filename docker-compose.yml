@@ -1,5 +1,8 @@
 # Local development dependencies. The application itself runs on the host via
 # `task run`, so a code change does not require an image rebuild.
+#
+# `docker compose --profile app up --build` also runs the API and dashboard as the
+# production images, to check that what ships actually boots.
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -23,6 +26,33 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  api:
+    profiles: [app]
+    build: .
+    env_file: .env
+    environment:
+      # Inside the compose network the database is a service, not localhost.
+      CRIAISIS_DATABASE_HOST: postgres
+      CRIAISIS_DATABASE_PORT: "5432"
+      CRIAISIS_SERVER_PORT: "8080"
+      CRIAISIS_SERVER_CORS_ALLOWED_ORIGINS: http://localhost:3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+
+  web:
+    profiles: [app]
+    build:
+      context: ./web
+      args:
+        CRIAISIS_API_URL: http://api:8080
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
 
 volumes:
   criaisis-pgdata:
