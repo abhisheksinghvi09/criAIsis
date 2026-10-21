@@ -43,7 +43,7 @@ function Incident() {
           <Card>
             <div className="row">
               <SeverityBadge severity={data.severity} />
-              <span className={`badge ${data.status === "resolved" ? "ok" : "accent"}`}>{data.status}</span>
+              <span className={`badge ${data.status === "resolved" ? "ok" : data.status === "failed" ? "critical" : "accent"}`}>{data.status}</span>
               <span className="badge muted mono">{data.trigger}</span>
             </div>
             <p style={{ fontSize: 13.5, lineHeight: 1.65 }}>{data.description}</p>

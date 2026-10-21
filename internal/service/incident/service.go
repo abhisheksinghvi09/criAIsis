@@ -105,6 +105,30 @@ func (s *Service) Open(ctx context.Context, in NewIncidentInput) (*entity.Incide
 // State is reloaded rather than carried on the job so a debate never runs against
 // an incident that was resolved while it sat in the queue.
 func (s *Service) HandleJob(ctx context.Context, j job.IncidentJob) error {
+	err := s.handleJob(ctx, j)
+	if err != nil {
+		s.markFailed(ctx, j)
+	}
+	return err
+}
+
+// markFailed records that the investigation did not complete, so the incident
+// does not sit in "investigating" forever. It runs detached from ctx because the
+// failure is often the ctx itself expiring or being cancelled.
+func (s *Service) markFailed(ctx context.Context, j job.IncidentJob) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+
+	inc, err := s.incidents.GetByID(ctx, j.WorkspaceID, j.IncidentID)
+	if err != nil || inc.Fail(time.Now().UTC()) != nil {
+		return // gone, or already resolved/failed: nothing to record
+	}
+	if err := s.incidents.Update(ctx, inc); err != nil {
+		s.log.Error().Err(err).Str("incident_id", j.IncidentID.String()).Msg("could not mark incident failed")
+	}
+}
+
+func (s *Service) handleJob(ctx context.Context, j job.IncidentJob) error {
 	ctx, cancel := context.WithTimeout(ctx, clashTimeout)
 	defer cancel()
 
@@ -124,7 +148,8 @@ func (s *Service) HandleJob(ctx context.Context, j job.IncidentJob) error {
 	if err != nil {
 		if errors.Is(err, tenant.ErrNotConfigured) {
 			s.log.Warn().Err(err).Str("incident_id", inc.ID().String()).Msg("skipping clash: workspace setup incomplete")
-			return nil
+			s.markFailed(ctx, j)
+			return nil // retrying cannot help until the tenant finishes setup
 		}
 		return fmt.Errorf("resolving workspace credentials: %w", err)
 	}

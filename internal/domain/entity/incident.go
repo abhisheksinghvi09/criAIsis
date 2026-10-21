@@ -157,6 +157,17 @@ func (i *Incident) Resolve(resolvedAt time.Time) error {
 	return nil
 }
 
+// Fail marks an investigation that could not complete. Only an investigating
+// incident can fail; a resolved one keeps its outcome.
+func (i *Incident) Fail(at time.Time) error {
+	if i.status != value.IncidentStatusInvestigating {
+		return fmt.Errorf("cannot fail an incident that is %s", i.status)
+	}
+	i.status = value.IncidentStatusFailed
+	i.updatedAt = at
+	return nil
+}
+
 // TriggerType returns how the incident was initiated, defaulting to slash_command.
 func (i *Incident) TriggerType() value.TriggerType {
 	var meta struct {

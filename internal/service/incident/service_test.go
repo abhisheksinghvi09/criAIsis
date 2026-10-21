@@ -428,3 +428,29 @@ func TestResolve_RejectsADoubleResolve(t *testing.T) {
 		t.Errorf("expected ErrIncidentAlreadyResolved on the second Resolve, got %v", err)
 	}
 }
+
+type failingChat struct{}
+
+func (failingChat) Complete(context.Context, llm.ChatRequest) (string, error) {
+	return "", errors.New("model unavailable")
+}
+
+func TestHandleJob_FailedClashMarksTheIncidentFailed(t *testing.T) {
+	svc, wsID := newTestService(t, &mockQueue{}, failingChat{})
+	opened, err := svc.Open(context.Background(), incident.NewIncidentInput{
+		WorkspaceID: wsID, Title: "DB errors", Description: "connections exhausted",
+		Severity: value.SeveritySev1, Trigger: value.TriggerTypeWebhook,
+		ChannelID: value.SlackChannelID("C999"), ThreadTS: value.SlackThreadTS("1700000000.000500"),
+		CreatedBy: value.SlackUserID("U999"),
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	if err := svc.HandleJob(context.Background(), job.IncidentJob{WorkspaceID: wsID, IncidentID: opened.ID()}); err == nil {
+		t.Fatal("expected the clash to fail when every model call fails")
+	}
+	if got := opened.Status(); got != value.IncidentStatusFailed {
+		t.Errorf("status = %s, want failed", got)
+	}
+}

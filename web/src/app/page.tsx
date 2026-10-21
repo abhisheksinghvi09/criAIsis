@@ -138,7 +138,7 @@ function Overview() {
                     <td><SeverityBadge severity={incident.severity} /></td>
                     <td className="mono">{incident.trigger}</td>
                     <td>
-                      <span className={`badge ${incident.status === "resolved" ? "ok" : "accent"}`}>
+                      <span className={`badge ${incident.status === "resolved" ? "ok" : incident.status === "failed" ? "critical" : "accent"}`}>
                         {incident.status}
                       </span>
                     </td>

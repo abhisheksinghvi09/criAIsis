@@ -121,6 +121,18 @@ func (r *PostgresIncidentRepository) ListRecent(ctx context.Context, wsID value.
 	return r.scanIncidentList(rows)
 }
 
+// FailOrphaned marks every incident still investigating that was created before
+// the given instant as failed. The queue is in-memory, so after a restart no
+// worker holds those jobs; leaving them "investigating" would hide the loss.
+func (r *PostgresIncidentRepository) FailOrphaned(ctx context.Context, before time.Time) (int64, error) {
+	tag, err := GetExecutor(ctx, r.pool).Exec(ctx,
+		`UPDATE incidents SET status = 'failed' WHERE status = 'investigating' AND created_at < $1`, before)
+	if err != nil {
+		return 0, fmt.Errorf("failing orphaned incidents: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 func (r *PostgresIncidentRepository) Update(ctx context.Context, inc *entity.Incident) error {
 	const query = `
 		UPDATE incidents

@@ -69,6 +69,14 @@ func main() {
 	buildOrch := buildOrchestrator(repos, srv.Logger)
 	incidents := incident.New(repos.incidents, resolver, buildOrch, srv.Queue, srv.Logger)
 
+	// The queue is in-memory, so anything still "investigating" from before this
+	// process started lost its job. Fail it visibly instead of leaving it hanging.
+	if n, err := repos.incidents.FailOrphaned(ctx, time.Now().UTC()); err != nil {
+		logger.Error().Err(err).Msg("could not fail orphaned incidents")
+	} else if n > 0 {
+		logger.Warn().Int64("count", n).Msg("marked orphaned incidents as failed")
+	}
+
 	// Workers run on their own context, not the signal one: cancelling on SIGTERM
 	// would abort running debates and strand the queue instead of draining it.
 	workerCtx, cancelWorkers := context.WithCancel(context.Background())
