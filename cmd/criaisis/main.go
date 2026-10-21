@@ -69,7 +69,11 @@ func main() {
 	buildOrch := buildOrchestrator(repos, srv.Logger)
 	incidents := incident.New(repos.incidents, resolver, buildOrch, srv.Queue, srv.Logger)
 
-	srv.Queue.Start(ctx, incidents.HandleJob)
+	// Workers run on their own context, not the signal one: cancelling on SIGTERM
+	// would abort running debates and strand the queue instead of draining it.
+	workerCtx, cancelWorkers := context.WithCancel(context.Background())
+	defer cancelWorkers()
+	srv.Queue.Start(workerCtx, incidents.HandleJob)
 
 	// The Slack surface is only mounted once a signing secret exists to verify
 	// requests against (BR0.1/NFR1). Without one, every /slack/* route is
@@ -121,7 +125,9 @@ func main() {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
+	err = srv.Shutdown(shutdownCtx)
+	cancelWorkers() // after the drain window: abort anything still running
+	if err != nil {
 		logger.Error().Err(err).Msg("unclean shutdown")
 		os.Exit(1)
 	}
