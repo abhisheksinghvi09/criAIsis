@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+# Every action is pinned to a commit SHA, not a movable tag: a compromised or
+# retagged release cannot change what runs here. Bump deliberately.
+#
 # Local-only deploy per team.md: this workflow builds, lints, tests, and scans.
 # It does not deploy anywhere - no target environment exists yet.
 jobs:
@@ -41,9 +44,9 @@ jobs:
       CRIAISIS_LLM_EMBEDDING_MODEL: text-embedding-3-small
       CRIAISIS_LLM_EMBEDDING_BASE_URL: https://api.openai.com/v1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: true
@@ -55,12 +58,12 @@ jobs:
         run: go vet ./...
 
       - name: Lint (golangci-lint, gosec enabled)
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
         with:
           version: v2.15.0
 
       - name: Vulnerability scan (govulncheck)
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
 
       - name: Unit tests (race, coverage)
         run: go test -race -coverprofile=coverage.out ./...
@@ -87,10 +90,10 @@ jobs:
     name: Secret scan (TruffleHog)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: trufflesecurity/trufflehog@main
+      - uses: trufflesecurity/trufflehog@e63326d6545de8f425d93ce24078c6e68d83f70e # v3.99.3
         with:
           extra_args: --results=verified,unknown
 
@@ -101,9 +104,9 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
           cache: npm
@@ -121,7 +124,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [backend, web]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Build API image
         run: docker build -t criaisis-api:${{ github.sha }} .
       - name: Build dashboard image
