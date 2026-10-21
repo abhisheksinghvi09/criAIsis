@@ -74,14 +74,18 @@ func main() {
 	buildOrch := buildOrchestrator(repos, srv.Logger)
 	slackAPI := slack.NewClient(nil)
 	incidents := incident.New(repos.incidents, resolver, buildOrch, srv.Queue, srv.Logger).
-		WithWarRoom(warroom.New(repos.workspaces, cipher, slackAPI, srv.Logger))
+		WithWarRoom(warroom.New(repos.workspaces, cipher, slackAPI, srv.Logger)).
+		WithTx(repos.tx)
 
-	// The queue is in-memory, so anything still "investigating" from before this
-	// process started lost its job. Fail it visibly instead of leaving it hanging.
-	if n, err := repos.incidents.FailOrphaned(ctx, time.Now().UTC()); err != nil {
-		logger.Error().Err(err).Msg("could not fail orphaned incidents")
-	} else if n > 0 {
-		logger.Warn().Int64("count", n).Msg("marked orphaned incidents as failed")
+	// Recover investigations whose work was lost before the durable queue held it.
+	if requeued, failed, err := repos.incidents.RecoverOrphaned(ctx, 24*time.Hour); err != nil {
+		logger.Error().Err(err).Msg("could not recover orphaned incidents")
+	} else if requeued+failed > 0 {
+		logger.Warn().Int64("requeued", requeued).Int64("failed", failed).Msg("recovered orphaned incidents")
+	}
+	if pq, ok := srv.Queue.(*postgres.PostgresJobQueue); ok {
+		pq.OnDead(incidents.MarkFailed)
+		telemetry.RegisterDeadLetters(pq.DeadLetters)
 	}
 
 	// Workers run on their own context, not the signal one: cancelling on SIGTERM
@@ -186,7 +190,7 @@ func newRepositories(srv *server.Server) repositories {
 // supplied per tenant, because every debate runs on that customer's own key.
 func buildOrchestrator(repos repositories, log *zerolog.Logger) incident.BuildOrchestrator {
 	return func(rt *tenant.Runtime) *orchestrator.Orchestrator {
-		return orchestrator.New(repos.personas, repos.chunks, repos.turns, rt.Chat, rt.Embedder, log)
+		return orchestrator.New(repos.personas, repos.chunks, repos.turns, rt.Chat, rt.Embedder, log).WithTx(repos.tx)
 	}
 }
 

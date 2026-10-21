@@ -27,6 +27,7 @@ type Orchestrator struct {
 	turns    repository.DebateTurnRepository
 	chat     llm.ChatProvider
 	embedder llm.EmbeddingProvider
+	tx       repository.TransactionManager
 	log      *zerolog.Logger
 }
 
@@ -44,6 +45,18 @@ func New(
 		chat: chat, embedder: embedder, log: log,
 	}
 }
+
+// WithTx makes the transcript write atomic: every turn of a clash commits
+// together or not at all.
+func (o *Orchestrator) WithTx(tx repository.TransactionManager) *Orchestrator {
+	o.tx = tx
+	return o
+}
+
+// ErrAlreadyInvestigated means this incident already has a complete transcript.
+// A retried job sees it after a crash between committing the transcript and
+// acknowledging the job; re-running would duplicate the debate.
+var ErrAlreadyInvestigated = errors.New("incident already has a complete investigation")
 
 // SpecialistOutcome pairs a persona with its Stage 1 result, or the reason it produced none.
 type SpecialistOutcome struct {
@@ -63,12 +76,18 @@ type ClashResult struct {
 // SucceededCount reports how many specialists filed a hypothesis.
 func (r ClashResult) SucceededCount() int { return succeeded(r.Stage1) }
 
-// RunClash executes Stage 1 and Stage 2 and persists every turn.
+// RunClash executes Stage 1 and Stage 2, then persists the transcript atomically.
 //
 // Stage 1 degrades gracefully by design: a persona whose model call or retrieval
 // fails is recorded as a failed outcome and the remaining specialists and the
 // consensus still post. Only a total Stage 1 washout aborts the clash.
 func (o *Orchestrator) RunClash(ctx context.Context, inc *entity.Incident) (*ClashResult, error) {
+	if done, err := o.hasSynthesis(ctx, inc); err != nil {
+		return nil, err
+	} else if done {
+		return nil, ErrAlreadyInvestigated
+	}
+
 	personas, err := o.enabledPersonas(ctx, inc.WorkspaceID())
 	if err != nil {
 		return nil, err
@@ -86,8 +105,49 @@ func (o *Orchestrator) RunClash(ctx context.Context, inc *entity.Incident) (*Cla
 	if err != nil {
 		return nil, err
 	}
+	if err := o.persistTranscript(ctx, outcomes, turn); err != nil {
+		return nil, err
+	}
 
 	return &ClashResult{Stage1: outcomes, Synthesis: synthesis, SynthesisTurn: turn}, nil
+}
+
+// hasSynthesis reports whether the incident's transcript is already complete.
+func (o *Orchestrator) hasSynthesis(ctx context.Context, inc *entity.Incident) (bool, error) {
+	turns, err := o.turns.ListByIncident(ctx, inc.WorkspaceID(), inc.ID())
+	if err != nil {
+		return false, fmt.Errorf("loading transcript: %w", err)
+	}
+	for _, t := range turns {
+		if t.TurnType() == value.TurnTypeSynthesis {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// persistTranscript writes every successful Stage 1 turn and the synthesis in one
+// transaction. Model calls happen first and only the finished debate is stored,
+// so a crash or a retry never leaves half a transcript or a duplicated one.
+func (o *Orchestrator) persistTranscript(ctx context.Context, outcomes []SpecialistOutcome, synthesis *entity.DebateTurn) error {
+	write := func(ctx context.Context) error {
+		for _, outcome := range outcomes {
+			if outcome.Err != nil || outcome.Turn == nil {
+				continue
+			}
+			if err := o.turns.Create(ctx, outcome.Turn); err != nil {
+				return fmt.Errorf("persisting %s turn: %w", outcome.Persona.Key(), err)
+			}
+		}
+		if err := o.turns.Create(ctx, synthesis); err != nil {
+			return fmt.Errorf("persisting synthesis turn: %w", err)
+		}
+		return nil
+	}
+	if o.tx == nil {
+		return write(ctx)
+	}
+	return o.tx.WithinTransaction(ctx, write)
 }
 
 // enabledPersonas loads the specialists configured to participate in this workspace.
@@ -184,9 +244,6 @@ func (o *Orchestrator) runSpecialist(
 	if err != nil {
 		return empty, nil, fmt.Errorf("building %s turn: %w", persona.Key(), err)
 	}
-	if err := o.turns.Create(ctx, turn); err != nil {
-		return empty, nil, fmt.Errorf("persisting %s turn: %w", persona.Key(), err)
-	}
 	return result, turn, nil
 }
 
@@ -228,9 +285,6 @@ func (o *Orchestrator) runStage2(ctx context.Context, inc *entity.Incident, outc
 	)
 	if err != nil {
 		return empty, nil, fmt.Errorf("building synthesis turn: %w", err)
-	}
-	if err := o.turns.Create(ctx, turn); err != nil {
-		return empty, nil, fmt.Errorf("persisting synthesis turn: %w", err)
 	}
 	return result, turn, nil
 }

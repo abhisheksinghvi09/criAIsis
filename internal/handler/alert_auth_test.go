@@ -223,7 +223,7 @@ func TestAlertHandler_RejectsMalformedBody(t *testing.T) {
 func TestAlertHandler_ReportsBackpressure(t *testing.T) {
 	h := newHarness(t)
 	for i := 0; i < 8; i++ {
-		_ = h.queue.Enqueue(job.IncidentJob{WorkspaceID: value.NewWorkspaceID(), IncidentID: uuid.New()})
+		_ = h.queue.Enqueue(context.Background(), job.IncidentJob{WorkspaceID: value.NewWorkspaceID(), IncidentID: uuid.New()})
 	}
 
 	rec := h.post(t, "/api/v1/integrations/alerts/grafana?workspace=T_ALPHA", h.secret, grafanaPayload)

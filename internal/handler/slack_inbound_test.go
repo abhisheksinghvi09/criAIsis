@@ -93,7 +93,7 @@ func (m *mockSlackClient) LookupUserByEmail(context.Context, string, string) (st
 
 type mockQueue struct{}
 
-func (q *mockQueue) Enqueue(j job.IncidentJob) error { return nil }
+func (q *mockQueue) Enqueue(_ context.Context, j job.IncidentJob) error { return nil }
 func (q *mockQueue) Start(ctx context.Context, handler job.Handler) {
 }
 func (q *mockQueue) Shutdown(ctx context.Context) error { return nil }

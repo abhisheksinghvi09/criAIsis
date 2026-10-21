@@ -46,7 +46,7 @@ func NewMemoryQueue(buffer, workers int, log *zerolog.Logger) *MemoryQueue {
 
 // Enqueue submits a job without blocking. A full buffer is reported to the caller
 // so the HTTP edge can shed load instead of holding a connection open.
-func (q *MemoryQueue) Enqueue(job IncidentJob) error {
+func (q *MemoryQueue) Enqueue(_ context.Context, job IncidentJob) error {
 	q.closeMu.RLock()
 	defer q.closeMu.RUnlock()
 
@@ -56,6 +56,7 @@ func (q *MemoryQueue) Enqueue(job IncidentJob) error {
 	default:
 	}
 
+	job.Attempt, job.MaxAttempts = 1, 1 // no retries: a failure is final
 	select {
 	case q.jobs <- job:
 		return nil

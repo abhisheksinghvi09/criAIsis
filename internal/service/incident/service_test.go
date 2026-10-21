@@ -132,7 +132,7 @@ type mockQueue struct {
 	failErr error
 }
 
-func (q *mockQueue) Enqueue(j job.IncidentJob) error {
+func (q *mockQueue) Enqueue(_ context.Context, j job.IncidentJob) error {
 	if q.failErr != nil {
 		return q.failErr
 	}
@@ -369,7 +369,7 @@ func TestHandleJob_SkipsAnAlreadyResolvedIncident(t *testing.T) {
 	}
 }
 
-func TestHandleJob_UnconfiguredWorkspaceIsSkippedNotRetried(t *testing.T) {
+func TestHandleJob_UnconfiguredWorkspaceFailsPermanently(t *testing.T) {
 	wsID := value.NewWorkspaceID()
 	cipher, err := crypto.New(testKey)
 	if err != nil {
@@ -394,8 +394,33 @@ func TestHandleJob_UnconfiguredWorkspaceIsSkippedNotRetried(t *testing.T) {
 		t.Fatalf("seeding incident: %v", err)
 	}
 
-	if err := svc.HandleJob(context.Background(), job.IncidentJob{WorkspaceID: wsID, IncidentID: inc.ID()}); err != nil {
-		t.Errorf("an unconfigured workspace should be skipped (nil error, no retry), got %v", err)
+	// Retrying cannot conjure a missing credential: the error is permanent, so a
+	// durable queue dead-letters it at once, and the incident is marked failed.
+	err = svc.HandleJob(context.Background(), job.IncidentJob{WorkspaceID: wsID, IncidentID: inc.ID(), Attempt: 1, MaxAttempts: 4})
+	if !job.IsPermanent(err) {
+		t.Errorf("expected a permanent error, got %v", err)
+	}
+	if inc.Status() != value.IncidentStatusFailed {
+		t.Errorf("status = %s, want failed", inc.Status())
+	}
+}
+
+// A transient failure with attempts left must not fail the incident: the queue
+// will retry, and the incident stays investigating.
+func TestHandleJob_TransientFailureWithAttemptsLeftKeepsInvestigating(t *testing.T) {
+	svc, wsID := newTestService(t, &mockQueue{}, failingChat{})
+	opened, _ := svc.Open(context.Background(), incident.NewIncidentInput{
+		WorkspaceID: wsID, Title: "x", Description: "y",
+		Severity: value.SeveritySev2, Trigger: value.TriggerTypeWebhook,
+		ChannelID: value.SlackChannelID("C9"), ThreadTS: value.SlackThreadTS("t2"), CreatedBy: value.SlackUserID("U9"),
+	})
+
+	err := svc.HandleJob(context.Background(), job.IncidentJob{WorkspaceID: wsID, IncidentID: opened.ID(), Attempt: 1, MaxAttempts: 4})
+	if err == nil || job.IsPermanent(err) {
+		t.Fatalf("expected a retryable error, got %v", err)
+	}
+	if opened.Status() != value.IncidentStatusInvestigating {
+		t.Errorf("status = %s after a retryable failure, want investigating", opened.Status())
 	}
 }
 
@@ -453,6 +478,10 @@ type fakeWarRoom struct {
 func (f *fakeWarRoom) Open(context.Context, *entity.Incident, *entity.WorkspaceSettings) (*warroom.Room, error) {
 	f.opened++
 	return &warroom.Room{ChannelID: "C_ROOM", ThreadTS: "1700.0001"}, nil
+}
+
+func (f *fakeWarRoom) Resume(_ context.Context, inc *entity.Incident) (*warroom.Room, error) {
+	return &warroom.Room{ChannelID: inc.SlackChannelID().String(), ThreadTS: inc.SlackThreadTS().String()}, nil
 }
 
 func (f *fakeWarRoom) PostVerdict(context.Context, *warroom.Room, notify.Report) error {

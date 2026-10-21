@@ -12,14 +12,11 @@ import (
 
 	"criaisis/internal/config"
 	"criaisis/internal/database"
+	"criaisis/internal/infrastructure/postgres"
 	"criaisis/internal/job"
 
 	"github.com/rs/zerolog"
 )
-
-// queueBuffer bounds how many incidents may wait for a worker. Past this the edge
-// sheds load, which is preferable to silently queueing work nobody will see in time.
-const queueBuffer = 128
 
 // clashWorkers caps concurrent debates. Each one fans out to four model calls, so
 // this is the real ceiling on outbound model concurrency.
@@ -47,7 +44,14 @@ func New(cfg *config.Config, logger *zerolog.Logger) (*Server, error) {
 		Config: cfg,
 		Logger: logger,
 		DB:     db,
-		Queue:  job.NewMemoryQueue(queueBuffer, clashWorkers, logger),
+		Queue: postgres.NewJobQueue(db.Pool, postgres.JobQueueConfig{
+			Workers: clashWorkers,
+			// A clash is bounded at 90s; the lease outlives it with margin and is
+			// renewed every third of its length while the job runs.
+			Lease:          2 * time.Minute,
+			MaxAttempts:    4,
+			PerTenantLimit: 2,
+		}, logger),
 	}, nil
 }
 

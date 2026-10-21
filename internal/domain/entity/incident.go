@@ -152,6 +152,30 @@ func (i *Incident) MoveToSlackThread(channel value.SlackChannelID, thread value.
 		return errors.New("slack channel and thread are required")
 	}
 	i.slackChannelID, i.slackThreadTS = channel, thread
+	return i.setMetadataField("war_room", true)
+}
+
+// HasWarRoom reports whether the incident already lives in its own Slack channel,
+// so a retried job reuses that room instead of opening a second one.
+func (i *Incident) HasWarRoom() bool {
+	var meta struct {
+		WarRoom bool `json:"war_room"`
+	}
+	return len(i.metadata) > 0 && json.Unmarshal(i.metadata, &meta) == nil && meta.WarRoom
+}
+
+// setMetadataField writes one key into the metadata document.
+func (i *Incident) setMetadataField(key string, v any) error {
+	meta := make(map[string]any)
+	if len(i.metadata) > 0 {
+		_ = json.Unmarshal(i.metadata, &meta)
+	}
+	meta[key] = v
+	raw, err := json.Marshal(meta)
+	if err != nil {
+		return err
+	}
+	i.metadata = raw
 	i.updatedAt = time.Now().UTC()
 	return nil
 }

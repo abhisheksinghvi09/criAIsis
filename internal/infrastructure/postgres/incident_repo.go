@@ -134,16 +134,38 @@ func (r *PostgresIncidentRepository) ListRecent(ctx context.Context, wsID value.
 	return r.scanIncidentList(rows)
 }
 
-// FailOrphaned marks every incident still investigating that was created before
-// the given instant as failed. The queue is in-memory, so after a restart no
-// worker holds those jobs; leaving them "investigating" would hide the loss.
-func (r *PostgresIncidentRepository) FailOrphaned(ctx context.Context, before time.Time) (int64, error) {
-	tag, err := GetExecutor(ctx, r.pool).Exec(ctx,
-		`UPDATE incidents SET status = 'failed' WHERE status = 'investigating' AND created_at < $1`, before)
+// orphaned matches incidents whose investigation never finished and that no job
+// is working on: still investigating, no synthesis turn, no live job. A finished
+// investigation also stays "investigating" until a human resolves it, which is
+// why the transcript, not the status, decides.
+const orphaned = `
+	i.status = 'investigating'
+	AND NOT EXISTS (SELECT 1 FROM debate_turns t WHERE t.incident_id = i.id AND t.turn_type = 'synthesis')
+	AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.incident_id = i.id AND j.status IN ('queued', 'running'))`
+
+// RecoverOrphaned runs at startup. Orphans younger than requeueWindow get a fresh
+// job (their work was lost, e.g. by a release that predates the durable queue);
+// older ones are marked failed, because a days-old investigation arriving now
+// would only confuse the people it pages.
+func (r *PostgresIncidentRepository) RecoverOrphaned(ctx context.Context, requeueWindow time.Duration) (requeued, failed int64, err error) {
+	exec := GetExecutor(ctx, r.pool)
+	tag, err := exec.Exec(ctx, `
+		INSERT INTO jobs (workspace_id, incident_id)
+		SELECT i.workspace_id, i.id FROM incidents i
+		WHERE `+orphaned+` AND i.created_at >= now() - make_interval(secs => $1)
+		ON CONFLICT (incident_id) WHERE status IN ('queued', 'running') DO NOTHING`, requeueWindow.Seconds())
 	if err != nil {
-		return 0, fmt.Errorf("failing orphaned incidents: %w", err)
+		return 0, 0, fmt.Errorf("requeueing orphaned incidents: %w", err)
 	}
-	return tag.RowsAffected(), nil
+	requeued = tag.RowsAffected()
+
+	tag, err = exec.Exec(ctx, `
+		UPDATE incidents i SET status = 'failed', updated_at = now()
+		WHERE `+orphaned+` AND i.created_at < now() - make_interval(secs => $1)`, requeueWindow.Seconds())
+	if err != nil {
+		return requeued, 0, fmt.Errorf("failing stale orphaned incidents: %w", err)
+	}
+	return requeued, tag.RowsAffected(), nil
 }
 
 func (r *PostgresIncidentRepository) Update(ctx context.Context, inc *entity.Incident) error {

@@ -16,6 +16,7 @@ import (
 	"criaisis/internal/infrastructure/oncall"
 	"criaisis/internal/infrastructure/slack"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
 
@@ -55,20 +56,18 @@ func New(workspaces repository.WorkspaceRepository, cipher *crypto.Cipher, sl sl
 // on-call, and posts the opening message. Invite failures are logged and skipped:
 // a missing person must never stop the investigation from having a room.
 func (s *Service) Open(ctx context.Context, inc *entity.Incident, settings *entity.WorkspaceSettings) (*Room, error) {
-	ws, err := s.workspaces.GetByID(ctx, inc.WorkspaceID())
-	if err != nil || ws == nil {
-		return nil, fmt.Errorf("loading workspace: %w", err)
-	}
-	token, err := s.cipher.Decrypt(ws.SlackBotTokenEncrypted())
+	token, err := s.botToken(ctx, inc)
 	if err != nil {
-		return nil, fmt.Errorf("decrypting bot token: %w", err)
-	}
-	if token == placeholderToken {
-		return nil, ErrNotInstalled
+		return nil, err
 	}
 
 	name := "inc-" + strings.ReplaceAll(inc.ID().String(), "-", "")[:8]
 	channelID, err := s.slack.CreatePrivateChannel(ctx, token, name)
+	if err != nil && strings.Contains(err.Error(), "name_taken") {
+		// A crash after creating the channel but before recording it leaves the name
+		// taken; a suffixed name keeps the retry moving.
+		channelID, err = s.slack.CreatePrivateChannel(ctx, token, name+"-"+uuid.NewString()[:4])
+	}
 	if err != nil {
 		return nil, fmt.Errorf("creating incident channel: %w", err)
 	}
@@ -89,6 +88,15 @@ func (s *Service) Open(ctx context.Context, inc *entity.Incident, settings *enti
 	return &Room{ChannelID: channelID, ThreadTS: ts, token: token}, nil
 }
 
+// Resume rebuilds the room for an incident that already has one (a retried job).
+func (s *Service) Resume(ctx context.Context, inc *entity.Incident) (*Room, error) {
+	token, err := s.botToken(ctx, inc)
+	if err != nil {
+		return nil, err
+	}
+	return &Room{ChannelID: inc.SlackChannelID().String(), ThreadTS: inc.SlackThreadTS().String(), token: token}, nil
+}
+
 // PostVerdict posts the finished investigation into the room's thread.
 func (s *Service) PostVerdict(ctx context.Context, room *Room, report notify.Report) error {
 	payload := notify.SlackPayload(report)
@@ -96,6 +104,22 @@ func (s *Service) PostVerdict(ctx context.Context, room *Room, report notify.Rep
 	payload["thread_ts"] = room.ThreadTS
 	_, err := s.slack.PostPayload(ctx, room.token, payload)
 	return err
+}
+
+// botToken decrypts the workspace's installed bot token.
+func (s *Service) botToken(ctx context.Context, inc *entity.Incident) (string, error) {
+	ws, err := s.workspaces.GetByID(ctx, inc.WorkspaceID())
+	if err != nil || ws == nil {
+		return "", fmt.Errorf("loading workspace: %w", err)
+	}
+	token, err := s.cipher.Decrypt(ws.SlackBotTokenEncrypted())
+	if err != nil {
+		return "", fmt.Errorf("decrypting bot token: %w", err)
+	}
+	if token == placeholderToken {
+		return "", ErrNotInstalled
+	}
+	return token, nil
 }
 
 // people resolves the Slack user ids to invite: the incident's author when they

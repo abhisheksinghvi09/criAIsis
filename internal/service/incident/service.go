@@ -35,6 +35,7 @@ type BuildOrchestrator func(*tenant.Runtime) *orchestrator.Orchestrator
 // WarRoom opens a per-incident Slack channel and posts the verdict into it.
 type WarRoom interface {
 	Open(ctx context.Context, inc *entity.Incident, settings *entity.WorkspaceSettings) (*warroom.Room, error)
+	Resume(ctx context.Context, inc *entity.Incident) (*warroom.Room, error)
 	PostVerdict(ctx context.Context, room *warroom.Room, report notify.Report) error
 }
 
@@ -45,6 +46,7 @@ type Service struct {
 	build     BuildOrchestrator
 	queue     job.Queue
 	warRoom   WarRoom
+	tx        repository.TransactionManager
 	log       *zerolog.Logger
 }
 
@@ -62,6 +64,13 @@ func New(
 // WithWarRoom enables per-incident Slack channels for tenants that choose them.
 func (s *Service) WithWarRoom(w WarRoom) *Service {
 	s.warRoom = w
+	return s
+}
+
+// WithTx makes Open atomic: the incident and its job commit together, so there is
+// never an incident without work queued for it, nor a job for a missing incident.
+func (s *Service) WithTx(tx repository.TransactionManager) *Service {
+	s.tx = tx
 	return s
 }
 
@@ -98,14 +107,24 @@ func (s *Service) Open(ctx context.Context, in NewIncidentInput) (*entity.Incide
 		}
 	}
 
-	if err := s.incidents.Create(ctx, inc); err != nil {
-		return nil, fmt.Errorf("persisting incident: %w", err)
+	persistAndQueue := func(ctx context.Context) error {
+		if err := s.incidents.Create(ctx, inc); err != nil {
+			return fmt.Errorf("persisting incident: %w", err)
+		}
+		if err := s.queue.Enqueue(ctx, job.IncidentJob{WorkspaceID: inc.WorkspaceID(), IncidentID: inc.ID()}); err != nil {
+			return fmt.Errorf("queueing clash: %w", err)
+		}
+		return nil
 	}
 
-	if err := s.queue.Enqueue(job.IncidentJob{WorkspaceID: inc.WorkspaceID(), IncidentID: inc.ID()}); err != nil {
-		// The incident is durable; only the debate was shed. Surfacing this lets the
-		// caller tell the user to retry rather than silently leaving a dead war room.
-		return inc, fmt.Errorf("queueing clash: %w", err)
+	if s.tx != nil {
+		if err := s.tx.WithinTransaction(ctx, persistAndQueue); err != nil {
+			return nil, err
+		}
+	} else if err := persistAndQueue(ctx); err != nil {
+		// Without a transaction the incident may be durable while only the debate was
+		// shed; returning it lets the caller report which incident to retry.
+		return inc, err
 	}
 
 	s.log.Info().
@@ -122,17 +141,24 @@ func (s *Service) Open(ctx context.Context, in NewIncidentInput) (*entity.Incide
 // an incident that was resolved while it sat in the queue.
 func (s *Service) HandleJob(ctx context.Context, j job.IncidentJob) error {
 	err := s.handleJob(ctx, j)
-	if err != nil {
+	switch {
+	case err == nil:
+		return nil
+	case job.IsPermanent(err) || j.FinalAttempt():
 		telemetry.ObserveInvestigation("failed", 0)
-		s.markFailed(ctx, j)
+		s.MarkFailed(ctx, j)
+	default:
+		// The queue will retry; the incident stays investigating until it succeeds
+		// or runs out of attempts.
+		telemetry.ObserveInvestigation("retry", 0)
 	}
 	return err
 }
 
-// markFailed records that the investigation did not complete, so the incident
+// MarkFailed records that the investigation did not complete, so the incident
 // does not sit in "investigating" forever. It runs detached from ctx because the
 // failure is often the ctx itself expiring or being cancelled.
-func (s *Service) markFailed(ctx context.Context, j job.IncidentJob) {
+func (s *Service) MarkFailed(ctx context.Context, j job.IncidentJob) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 
@@ -166,9 +192,8 @@ func (s *Service) handleJob(ctx context.Context, j job.IncidentJob) error {
 	if err != nil {
 		if errors.Is(err, tenant.ErrNotConfigured) {
 			s.log.Warn().Err(err).Str("incident_id", inc.ID().String()).Msg("skipping clash: workspace setup incomplete")
-			telemetry.ObserveInvestigation("failed", 0)
-			s.markFailed(ctx, j)
-			return nil // retrying cannot help until the tenant finishes setup
+			// Permanent: retrying cannot help until the tenant finishes setup.
+			return job.Permanent(err)
 		}
 		return fmt.Errorf("resolving workspace credentials: %w", err)
 	}
@@ -177,6 +202,12 @@ func (s *Service) handleJob(ctx context.Context, j job.IncidentJob) error {
 
 	started := time.Now()
 	result, err := s.build(runtime).RunClash(ctx, inc)
+	if errors.Is(err, orchestrator.ErrAlreadyInvestigated) {
+		// A retry after the transcript committed but before the job was acknowledged.
+		s.log.Info().Str("incident_id", inc.ID().String()).Msg("skipping clash: transcript already complete")
+		telemetry.ObserveInvestigation("skipped", 0)
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("running clash for %s: %w", inc.ID(), err)
 	}
@@ -199,6 +230,14 @@ func (s *Service) handleJob(ctx context.Context, j job.IncidentJob) error {
 func (s *Service) openRoom(ctx context.Context, runtime *tenant.Runtime, inc *entity.Incident) *warroom.Room {
 	if s.warRoom == nil || !runtime.Settings.UsesIncidentChannels() {
 		return nil
+	}
+	if inc.HasWarRoom() {
+		room, err := s.warRoom.Resume(ctx, inc)
+		if err != nil {
+			s.log.Error().Err(err).Str("incident_id", inc.ID().String()).Msg("could not resume incident channel")
+			return nil
+		}
+		return room
 	}
 	room, err := s.warRoom.Open(ctx, inc, runtime.Settings)
 	if err != nil {

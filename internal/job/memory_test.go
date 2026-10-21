@@ -38,7 +38,7 @@ func TestMemoryQueue_ProcessesEveryJob(t *testing.T) {
 	})
 
 	for i := 0; i < 10; i++ {
-		if err := q.Enqueue(testJob()); err != nil {
+		if err := q.Enqueue(context.Background(), testJob()); err != nil {
 			t.Fatalf("enqueue %d failed: %v", i, err)
 		}
 	}
@@ -61,15 +61,15 @@ func TestMemoryQueue_ProcessesEveryJob(t *testing.T) {
 func TestMemoryQueue_EnqueueDoesNotBlockWhenFull(t *testing.T) {
 	q := newQueue(2, 1) // not started: nothing drains it
 
-	if err := q.Enqueue(testJob()); err != nil {
+	if err := q.Enqueue(context.Background(), testJob()); err != nil {
 		t.Fatalf("first enqueue should succeed: %v", err)
 	}
-	if err := q.Enqueue(testJob()); err != nil {
+	if err := q.Enqueue(context.Background(), testJob()); err != nil {
 		t.Fatalf("second enqueue should succeed: %v", err)
 	}
 
 	start := time.Now()
-	err := q.Enqueue(testJob())
+	err := q.Enqueue(context.Background(), testJob())
 	elapsed := time.Since(start)
 
 	if !errors.Is(err, job.ErrQueueFull) {
@@ -100,8 +100,8 @@ func TestMemoryQueue_SurvivesPanickingHandler(t *testing.T) {
 		return nil
 	})
 
-	_ = q.Enqueue(testJob())
-	_ = q.Enqueue(testJob())
+	_ = q.Enqueue(context.Background(), testJob())
+	_ = q.Enqueue(context.Background(), testJob())
 
 	select {
 	case <-recovered:
@@ -120,7 +120,7 @@ func TestMemoryQueue_RejectsAfterShutdown(t *testing.T) {
 		t.Fatalf("shutdown failed: %v", err)
 	}
 
-	if err := q.Enqueue(testJob()); !errors.Is(err, job.ErrQueueClosed) {
+	if err := q.Enqueue(context.Background(), testJob()); !errors.Is(err, job.ErrQueueClosed) {
 		t.Errorf("expected ErrQueueClosed after shutdown, got %v", err)
 	}
 }
@@ -140,7 +140,7 @@ func TestMemoryQueue_ConcurrentEnqueueDuringShutdownNeverPanics(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				defer func() { _ = recover() }() // a pre-fix panic would otherwise fail the whole test binary
-				_ = q.Enqueue(testJob())
+				_ = q.Enqueue(context.Background(), testJob())
 			}()
 		}
 

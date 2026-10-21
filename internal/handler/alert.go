@@ -155,13 +155,13 @@ func (h *AlertHandler) Receive(w http.ResponseWriter, r *http.Request) {
 	})
 
 	switch {
-	case errors.Is(err, job.ErrQueueFull):
-		// The incident is durable but the debate was shed. 503 tells the provider to
-		// retry, which is the honest answer.
-		h.log.Error().Str("incident_id", inc.ID().String()).Msg("queue saturated, clash not started")
+	case errors.Is(err, job.ErrQueueFull), errors.Is(err, job.ErrQueueClosed):
+		// The debate was shed (or the process is shutting down). 503 tells the
+		// provider to retry; with a transactional Open no incident was kept, and the
+		// payload-derived key makes the retry land on the same incident.
+		h.log.Error().Err(err).Msg("queue unavailable, clash not started")
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"incident_id": inc.ID().String(),
-			"error":       "investigation queue is saturated, retry shortly",
+			"error": "investigation queue is unavailable, retry shortly",
 		})
 		return
 	case err != nil:

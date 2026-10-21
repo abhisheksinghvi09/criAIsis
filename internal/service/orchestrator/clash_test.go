@@ -3,6 +3,7 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"testing"
 
@@ -239,6 +240,11 @@ func TestRunClash_RejectsUnparseableClassification(t *testing.T) {
 	if _, err := f.orch.RunClash(context.Background(), f.incident); err == nil {
 		t.Fatal("expected an invalid classification to fail the synthesis")
 	}
+	// The transcript is all-or-nothing: a failed synthesis leaves no Stage 1 turns
+	// behind for a retry to duplicate.
+	if n := len(f.turns.all()); n != 0 {
+		t.Errorf("failed clash persisted %d turns, want 0", n)
+	}
 }
 
 func TestFollowUp_PersistsStage3Turn(t *testing.T) {
@@ -277,4 +283,22 @@ func marshalJSON(t *testing.T, v any) string {
 		t.Fatalf("marshaling test payload: %v", err)
 	}
 	return string(raw)
+}
+
+// A retried job must not run the debate a second time once its transcript exists.
+func TestRunClash_IsIdempotentOnceTheTranscriptExists(t *testing.T) {
+	f := newFixture(t, nil)
+	ctx := context.Background()
+
+	if _, err := f.orch.RunClash(ctx, f.incident); err != nil {
+		t.Fatalf("first RunClash: %v", err)
+	}
+	before := len(f.turns.all())
+
+	if _, err := f.orch.RunClash(ctx, f.incident); !errors.Is(err, orchestrator.ErrAlreadyInvestigated) {
+		t.Fatalf("second RunClash err = %v, want ErrAlreadyInvestigated", err)
+	}
+	if after := len(f.turns.all()); after != before {
+		t.Errorf("retry wrote %d extra turns", after-before)
+	}
 }

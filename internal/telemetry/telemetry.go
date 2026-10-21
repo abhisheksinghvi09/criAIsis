@@ -54,6 +54,14 @@ func RegisterQueueDepth(depth func() int) {
 	}, func() float64 { return float64(depth()) })
 }
 
+// RegisterDeadLetters exposes how many jobs exhausted their attempts. Any growth
+// is an investigation that never reached anyone and should page.
+func RegisterDeadLetters(count func() int) {
+	promauto.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "criaisis_jobs_dead", Help: "Jobs that exhausted their retry attempts.",
+	}, func() float64 { return float64(count()) })
+}
+
 // Middleware logs and measures every request. The route is the chi pattern, not
 // the raw path, so metric cardinality stays bounded and ids never become labels.
 // The query string is never logged: it can carry an OAuth code.

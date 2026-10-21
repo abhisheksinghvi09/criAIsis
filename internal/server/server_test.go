@@ -23,7 +23,7 @@ type stubQueue struct {
 	shutdownCalls int
 }
 
-func (q *stubQueue) Enqueue(job.IncidentJob) error { return nil }
+func (q *stubQueue) Enqueue(context.Context, job.IncidentJob) error { return nil }
 func (q *stubQueue) Start(context.Context, job.Handler) {}
 func (q *stubQueue) Shutdown(context.Context) error {
 	q.shutdownCalls++
