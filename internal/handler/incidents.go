@@ -25,6 +25,9 @@ type IncidentReadHandler struct {
 }
 
 // NewIncidentReadHandler wires the read side of incidents.
+// maxOffset bounds how deep a caller can page; deep OFFSETs are slow in Postgres.
+const maxOffset = 10000
+
 func NewIncidentReadHandler(
 	incidents repository.IncidentRepository,
 	turns repository.DebateTurnRepository,
@@ -49,7 +52,14 @@ func (h *IncidentReadHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	incidents, err := h.incidents.ListRecent(r.Context(), ws.ID(), limit, 0)
+	offset := 0
+	if raw := r.URL.Query().Get("offset"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 && parsed <= maxOffset {
+			offset = parsed
+		}
+	}
+
+	incidents, err := h.incidents.ListRecent(r.Context(), ws.ID(), limit, offset)
 	if err != nil {
 		h.log.Error().Err(err).Msg("listing incidents")
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not list incidents"})
