@@ -43,6 +43,7 @@ type Config struct {
 	Security SecurityConfig `koanf:"security" validate:"required"`
 	Slack    SlackConfig    `koanf:"slack"`
 	LLM      LLMConfig      `koanf:"llm" validate:"required"`
+	Features FeaturesConfig `koanf:"features"`
 }
 
 // Primary defines runtime environment semantics (e.g. log levels, test bypasses).
@@ -67,6 +68,13 @@ type ServerConfig struct {
 type SecurityConfig struct {
 	CredentialEncryptionKey string `koanf:"credential_encryption_key" validate:"required,len=32"`
 	AdminAPIKey             string `koanf:"admin_api_key" validate:"required,min=24"`
+}
+
+// FeaturesConfig switches off work that is not production-ready.
+type FeaturesConfig struct {
+	// Sandbox enables incident reproduction. Off by default: it shells out to the
+	// host's docker and its access links are not real yet.
+	Sandbox bool `koanf:"sandbox"`
 }
 
 // SlackConfig holds OAuth application credentials for the Slack app. Left

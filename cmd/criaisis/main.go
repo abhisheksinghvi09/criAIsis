@@ -102,15 +102,19 @@ func main() {
 	}
 	slackRate := handler.NewWorkspaceRateLimitMiddleware(30, time.Minute, srv.Logger)
 
-	sandboxSvc := sandbox.NewService(repos.sandbox, repos.incidents, sandbox.NewExecProvisioner(""), srv.Logger)
-	sandboxHandler := handler.NewSandboxHandler(sandboxSvc, srv.Logger)
+	// Nil leaves the sandbox routes unmounted (router checks for it).
+	var sandboxHandler *handler.SandboxHandler
+	if cfg.Features.Sandbox {
+		sandboxSvc := sandbox.NewService(repos.sandbox, repos.incidents, sandbox.NewExecProvisioner(""), srv.Logger)
+		sandboxHandler = handler.NewSandboxHandler(sandboxSvc, srv.Logger)
+	}
 
 	srv.SetupHTTPServer(router.New(srv, router.Handlers{
 		Alert: handler.NewAlertHandler(repos.workspaces, incidents, &logger),
 		Workspace: handler.NewWorkspaceHandler(
 			repos.workspaces, repos.personas, repos.settings, repos.tx, resolver, incidents, cipher,
 			defaultsFrom(cfg), &logger,
-		),
+		).WithSandbox(cfg.Features.Sandbox),
 		Runbook:        handler.NewRunbookHandler(repos.documents, repos.chunks, repos.personas, resolver, &logger),
 		Incidents:      handler.NewIncidentReadHandler(repos.incidents, repos.turns, repos.personas, &logger),
 		Personas:       handler.NewPersonaHandler(repos.personas, repos.documents, &logger),

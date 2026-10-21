@@ -28,6 +28,7 @@ export interface WorkspaceSettings {
   };
   ready_to_investigate: boolean;
   missing: string[] | null;
+  features?: { sandbox: boolean };
 }
 
 export interface Specialist {

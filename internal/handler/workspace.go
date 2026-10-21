@@ -35,6 +35,7 @@ type WorkspaceHandler struct {
 	incidents  *incident.Service
 	cipher     *crypto.Cipher
 	prov       *Provisioner
+	sandbox    bool
 	log        *zerolog.Logger
 }
 
@@ -55,6 +56,13 @@ func NewWorkspaceHandler(
 		incidents: incidents, cipher: cipher, log: log,
 		prov: NewProvisioner(workspaces, settings, personas, tx, defaults),
 	}
+}
+
+// WithSandbox records whether incident reproduction is enabled, so the dashboard
+// can hide a feature the server does not serve.
+func (h *WorkspaceHandler) WithSandbox(enabled bool) *WorkspaceHandler {
+	h.sandbox = enabled
+	return h
 }
 
 // workspaceParam reads the tenant identifier from the route.
@@ -123,8 +131,9 @@ func (h *WorkspaceHandler) Show(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"team_id": ws.SlackTeamID(),
-		"name":    ws.SlackTeamName(),
+		"team_id":  ws.SlackTeamID(),
+		"name":     ws.SlackTeamName(),
+		"features": map[string]bool{"sandbox": h.sandbox},
 		"llm": map[string]any{
 			"provider":         settings.LLMProvider(),
 			"api_key_set":      settings.HasLLMKey(),

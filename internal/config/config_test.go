@@ -225,3 +225,21 @@ func TestLoadConfigFromEnviron_RejectsPlaceholderSecretsInProduction(t *testing.
 		}
 	}
 }
+
+func TestFeatures_SandboxIsOffUnlessEnabled(t *testing.T) {
+	cfg, err := LoadConfigFromEnviron(validEnviron())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Features.Sandbox {
+		t.Error("sandbox must default to off")
+	}
+
+	cfg, err = LoadConfigFromEnviron(append(validEnviron(), "CRIAISIS_FEATURES_SANDBOX=true"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Features.Sandbox {
+		t.Error("CRIAISIS_FEATURES_SANDBOX=true did not enable the sandbox")
+	}
+}

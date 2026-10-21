@@ -10,7 +10,7 @@ import { Card, ClassificationBadge, Empty, PersonaBadge, SeverityBadge, formatTi
 import { api } from "@/lib/api";
 import { useSession } from "@/lib/session";
 import { useResource } from "@/lib/useApi";
-import type { Credentials, DebateTurn, IncidentDetail } from "@/lib/types";
+import type { Credentials, DebateTurn, IncidentDetail, WorkspaceSettings } from "@/lib/types";
 
 export default function IncidentPage() {
   return (
@@ -28,6 +28,7 @@ function Incident() {
   const fetcher = useCallback((credentials: Credentials) => api.incident(credentials, id), [id]);
   const incident = useResource<IncidentDetail>(fetcher);
   const data = incident.data;
+  const settings = useResource<WorkspaceSettings>(api.settings);
 
   return (
     <Shell
@@ -49,11 +50,13 @@ function Incident() {
             <p style={{ fontSize: 13.5, lineHeight: 1.65 }}>{data.description}</p>
           </Card>
 
-          <SandboxReproductionPanel
-            incidentId={data.id}
-            incidentStatus={data.status}
-            credentials={creds}
-          />
+          {settings.data?.features?.sandbox ? (
+            <SandboxReproductionPanel
+              incidentId={data.id}
+              incidentStatus={data.status}
+              credentials={creds}
+            />
+          ) : null}
 
           {data.context ? <Evidence context={data.context} /> : null}
 
