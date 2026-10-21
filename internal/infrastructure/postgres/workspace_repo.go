@@ -120,7 +120,7 @@ func (r *PostgresWorkspaceRepository) GetBySlackTeamID(ctx context.Context, team
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("workspace with slack team id '%s' not found", teamID)
+			return nil, fmt.Errorf("slack team id '%s': %w", teamID, repository.ErrWorkspaceNotFound)
 		}
 		return nil, fmt.Errorf("querying workspace by slack team id: %w", err)
 	}

@@ -115,7 +115,7 @@ func TestSlackInboundHandler(t *testing.T) {
 	}
 
 	h := handler.NewSlackInboundHandler(
-		wsRepo, incRepo, incSvc, resolver, buildOrch, cipher, slClient,
+		wsRepo, incRepo, incSvc, resolver, buildOrch, cipher, slClient, newTestProvisioner(wsRepo),
 		"client-id", "client-secret", &logger,
 	)
 
@@ -133,8 +133,7 @@ func TestSlackInboundHandler(t *testing.T) {
 	})
 
 	t.Run("US1.1: OAuth success creates workspace with encrypted token", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/slack/oauth/callback?code=test-code", nil)
-		rec := httptest.NewRecorder()
+		req, rec := oauthCallbackRequest(t, h, "test-code")
 
 		h.HandleOAuthCallback(rec, req)
 		if rec.Code != http.StatusOK {

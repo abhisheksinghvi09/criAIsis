@@ -41,7 +41,7 @@ func TestSecurityRegression_US7_1(t *testing.T) {
 
 	slClient := &mockSlackClient{}
 	inboundH := handler.NewSlackInboundHandler(
-		wsRepo, incRepo, incSvc, resolver, nil, cipher, slClient,
+		wsRepo, incRepo, incSvc, resolver, nil, cipher, slClient, newTestProvisioner(wsRepo),
 		"client-id", "client-secret", &logger,
 	)
 

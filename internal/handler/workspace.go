@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,7 +32,7 @@ type WorkspaceHandler struct {
 	resolver   *tenant.Resolver
 	incidents  *incident.Service
 	cipher     *crypto.Cipher
-	defaults   entity.SettingsDefaults
+	prov       *Provisioner
 	log        *zerolog.Logger
 }
 
@@ -51,7 +50,8 @@ func NewWorkspaceHandler(
 ) *WorkspaceHandler {
 	return &WorkspaceHandler{
 		workspaces: workspaces, personas: personas, settings: settings, tx: tx, resolver: resolver,
-		incidents: incidents, cipher: cipher, defaults: defaults, log: log,
+		incidents: incidents, cipher: cipher, log: log,
+		prov: NewProvisioner(workspaces, settings, personas, tx, defaults),
 	}
 }
 
@@ -91,50 +91,12 @@ func (h *WorkspaceHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	adminKey, err := ws.GenerateAdminAPIKey()
-	if err != nil {
-		h.fail(w, "generating admin key", err)
-		return
-	}
-	alertToken, err := ws.GenerateWebhookSecret()
-	if err != nil {
-		h.fail(w, "generating alert token", err)
-		return
-	}
-
-	settings, err := entity.NewWorkspaceSettings(ws.ID(), h.defaults)
-	if err != nil {
-		h.fail(w, "preparing settings", err)
-		return
-	}
-	personas, err := entity.DefaultPersonas(ws.ID())
-	if err != nil {
-		h.fail(w, "building specialists", err)
-		return
-	}
-
-	// A workspace is useless without its settings row and default personas: the
-	// clash engine can't resolve credentials or run Stage 1 without them. Commit
-	// all three writes atomically so a failure partway through never leaves a
-	// workspace stuck half-provisioned.
-	err = h.tx.WithinTransaction(r.Context(), func(ctx context.Context) error {
-		if err := h.workspaces.Create(ctx, ws); err != nil {
-			return fmt.Errorf("creating workspace: %w", err)
-		}
-		if err := h.settings.Create(ctx, settings); err != nil {
-			return fmt.Errorf("creating settings: %w", err)
-		}
-		for _, persona := range personas {
-			if err := h.personaCreate(ctx, persona); err != nil {
-				return fmt.Errorf("seeding specialists: %w", err)
-			}
-		}
-		return nil
-	})
+	creds, err := h.prov.Provision(r.Context(), ws)
 	if err != nil {
 		h.fail(w, "provisioning workspace", err)
 		return
 	}
+	adminKey, alertToken := creds.AdminKey, creds.AlertToken
 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"team_id":     ws.SlackTeamID(),
@@ -401,11 +363,6 @@ func (h *WorkspaceHandler) save(w http.ResponseWriter, r *http.Request, settings
 		"ready_to_investigate": settings.IsReadyToInvestigate(),
 		"missing":              settings.MissingRequirements(),
 	})
-}
-
-// personaCreate seeds one specialist. Declared separately so Create stays readable.
-func (h *WorkspaceHandler) personaCreate(ctx context.Context, persona *entity.Persona) error {
-	return h.personas.Create(ctx, persona)
 }
 
 // fail logs the cause and returns a generic message, so an internal error never

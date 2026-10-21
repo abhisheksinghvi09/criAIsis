@@ -96,6 +96,7 @@ func main() {
 		slackSig = handler.NewSlackSignatureMiddleware(cfg.Slack.SigningSecret, srv.Logger)
 		slackInbound = handler.NewSlackInboundHandler(
 			repos.workspaces, repos.incidents, incidents, resolver, buildOrch, cipher, slackClient,
+			handler.NewProvisioner(repos.workspaces, repos.settings, repos.personas, repos.tx, defaultsFrom(cfg)),
 			cfg.Slack.ClientID, cfg.Slack.ClientSecret, srv.Logger,
 		)
 	}

@@ -49,6 +49,7 @@ func New(srv *server.Server, h Handlers) http.Handler {
 	// Inbound Slack surface (OAuth, Slash Commands, Interactivity, Events API)
 	if h.SlackInbound != nil {
 		r.Route("/slack", func(sr chi.Router) {
+			sr.Get("/install", h.SlackInbound.HandleInstall)
 			sr.Get("/oauth/callback", h.SlackInbound.HandleOAuthCallback)
 
 			sr.Group(func(protected chi.Router) {

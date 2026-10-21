@@ -2,10 +2,15 @@ package repository
 
 import (
 	"context"
+	"errors"
 
 	"criaisis/internal/domain/entity"
 	"criaisis/internal/domain/value"
 )
+
+// ErrWorkspaceNotFound is returned when no workspace matches the lookup, so a
+// caller can tell "absent" apart from a storage failure.
+var ErrWorkspaceNotFound = errors.New("workspace not found")
 
 // WorkspaceRepository defines the persistence contract for tenant accounts.
 // All lookups outside Slack OAuth must be scoped to a validated WorkspaceID.

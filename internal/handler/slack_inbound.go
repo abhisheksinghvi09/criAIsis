@@ -2,10 +2,17 @@ package handler
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +37,7 @@ type SlackInboundHandler struct {
 	build        incident.BuildOrchestrator
 	crypto       *crypto.Cipher
 	slackClient  slack.Client
+	prov         *Provisioner
 	clientID     string
 	clientSecret string
 	log          *zerolog.Logger
@@ -44,6 +52,7 @@ func NewSlackInboundHandler(
 	build incident.BuildOrchestrator,
 	crypto *crypto.Cipher,
 	slackClient slack.Client,
+	prov *Provisioner,
 	clientID string,
 	clientSecret string,
 	log *zerolog.Logger,
@@ -56,10 +65,73 @@ func NewSlackInboundHandler(
 		build:        build,
 		crypto:       crypto,
 		slackClient:  slackClient,
+		prov:         prov,
 		clientID:     clientID,
 		clientSecret: clientSecret,
 		log:          log,
 	}
+}
+
+const (
+	oauthStateCookie = "criaisis_oauth_state"
+	oauthStateTTL    = 10 * time.Minute
+	// slackScopes are what the bot needs: slash commands, replying, and @mentions.
+	slackScopes = "commands,chat:write,app_mentions:read"
+)
+
+// HandleInstall starts the OAuth flow. It issues a signed, short-lived state and
+// binds it to this browser with a cookie, so the callback can reject a code that
+// someone else initiated (install CSRF).
+func (h *SlackInboundHandler) HandleInstall(w http.ResponseWriter, r *http.Request) {
+	state, err := h.newState()
+	if err != nil {
+		h.log.Error().Err(err).Msg("generating oauth state")
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not start install"})
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: oauthStateCookie, Value: state, Path: "/slack/oauth", MaxAge: int(oauthStateTTL.Seconds()),
+		HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
+	})
+	q := url.Values{"client_id": {h.clientID}, "scope": {slackScopes}, "state": {state}}
+	http.Redirect(w, r, "https://slack.com/oauth/v2/authorize?"+q.Encode(), http.StatusFound)
+}
+
+// newState returns "nonce.expiry.signature", signed with the Slack client secret.
+func (h *SlackInboundHandler) newState() (string, error) {
+	nonce := make([]byte, 16)
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+	payload := hex.EncodeToString(nonce) + "." + strconv.FormatInt(time.Now().Add(oauthStateTTL).Unix(), 10)
+	return payload + "." + h.signState(payload), nil
+}
+
+func (h *SlackInboundHandler) signState(payload string) string {
+	mac := hmac.New(sha256.New, []byte(h.clientSecret))
+	mac.Write([]byte(payload))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// stateMatchesCookie accepts the callback only when the state in the URL equals
+// the one in this browser's cookie, carries a valid signature and has not expired.
+func (h *SlackInboundHandler) stateMatchesCookie(r *http.Request, state string) bool {
+	c, err := r.Cookie(oauthStateCookie)
+	if err != nil || state == "" || subtle.ConstantTimeCompare([]byte(c.Value), []byte(state)) != 1 {
+		return false
+	}
+	i := strings.LastIndex(state, ".")
+	if i < 0 {
+		return false
+	}
+	payload, sig := state[:i], state[i+1:]
+	if !hmac.Equal([]byte(sig), []byte(h.signState(payload))) {
+		return false
+	}
+	_, expiry, ok := strings.Cut(payload, ".")
+	exp, err := strconv.ParseInt(expiry, 10, 64)
+	return ok && err == nil && time.Now().Unix() < exp
 }
 
 // HandleOAuthCallback handles the OAuth 2.0 exchange when an admin installs the app.
@@ -73,6 +145,12 @@ func (h *SlackInboundHandler) HandleOAuthCallback(w http.ResponseWriter, r *http
 		_, _ = w.Write([]byte("Slack installation was cancelled or denied. You can try again."))
 		return
 	}
+
+	if !h.stateMatchesCookie(r, r.URL.Query().Get("state")) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid or expired install state; start again from /slack/install"})
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: oauthStateCookie, Path: "/slack/oauth", MaxAge: -1})
 
 	code := r.URL.Query().Get("code")
 	if code == "" {
@@ -95,6 +173,15 @@ func (h *SlackInboundHandler) HandleOAuthCallback(w http.ResponseWriter, r *http
 	}
 
 	ws, err := h.workspaces.GetBySlackTeamID(ctx, res.Team.ID)
+	if err != nil && !errors.Is(err, repository.ErrWorkspaceNotFound) {
+		// A storage failure is not "new install": treating it as one would try to
+		// create a duplicate tenant.
+		h.log.Error().Err(err).Msg("failed looking up workspace on install")
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not look up workspace"})
+		return
+	}
+
+	w.Header().Set("Cache-Control", "no-store")
 	if err == nil && ws != nil {
 		// Existing workspace reinstall: update team name and bot token
 		_ = ws.UpdateTeamName(res.Team.Name)
@@ -104,24 +191,32 @@ func (h *SlackInboundHandler) HandleOAuthCallback(w http.ResponseWriter, r *http
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed updating workspace"})
 			return
 		}
-	} else {
-		// New installation
-		newWS, err := entity.NewWorkspace(res.Team.ID, res.Team.Name, encryptedToken)
-		if err != nil {
-			h.log.Error().Err(err).Msg("failed creating workspace entity")
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed creating workspace"})
-			return
-		}
-		if err := h.workspaces.Create(ctx, newWS); err != nil {
-			h.log.Error().Err(err).Msg("failed saving new workspace")
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed saving workspace"})
-			return
-		}
+		h.log.Info().Str("team_id", res.Team.ID).Msg("slack app reinstalled")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("Slack reinstall successful! You may return to the criAIsis dashboard."))
+		return
+	}
+
+	// New installation: provision a complete tenant, not just the workspace row.
+	newWS, err := entity.NewWorkspace(res.Team.ID, res.Team.Name, encryptedToken)
+	if err != nil {
+		h.log.Error().Err(err).Msg("failed creating workspace entity")
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed creating workspace"})
+		return
+	}
+	creds, err := h.prov.Provision(ctx, newWS)
+	if err != nil {
+		h.log.Error().Err(err).Msg("failed provisioning workspace on install")
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed saving workspace"})
+		return
 	}
 
 	h.log.Info().Str("team_id", res.Team.ID).Str("team_name", res.Team.Name).Msg("slack app installed successfully")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("Slack installation successful! You may return to the criAIsis dashboard."))
+	_, _ = fmt.Fprintf(w, "Slack installation successful!\n\n"+
+		"Workspace: %s\nAdmin key (dashboard sign-in): %s\nAlert token (monitoring webhooks): %s\n\n"+
+		"Both credentials are shown once and stored only as digests. Save them now.\n",
+		res.Team.ID, creds.AdminKey, creds.AlertToken)
 }
 
 // HandleCommand processes slash commands (/criaisis investigate, /criaisis resolve).
