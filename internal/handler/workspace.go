@@ -90,7 +90,7 @@ func (h *WorkspaceHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	// Until a Slack app exists there is no bot token; a sealed placeholder keeps
 	// the column honest rather than pretending one was installed.
-	placeholder, err := h.cipher.Encrypt("pending-slack-install")
+	placeholder, err := h.cipher.Seal("pending-slack-install", crypto.BotTokenAAD(req.TeamID))
 	if err != nil {
 		h.fail(w, "sealing placeholder token", err)
 		return
@@ -195,7 +195,7 @@ func (h *WorkspaceHandler) SetLLM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sealed, err := h.cipher.Encrypt(req.APIKey)
+	sealed, err := h.cipher.Seal(req.APIKey, crypto.SettingAAD(ws.ID().String(), crypto.FieldLLMKey))
 	if err != nil {
 		h.fail(w, "sealing model key", err)
 		return
@@ -238,7 +238,7 @@ func (h *WorkspaceHandler) SetEmbeddings(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	sealed, err := h.cipher.Encrypt(req.APIKey)
+	sealed, err := h.cipher.Seal(req.APIKey, crypto.SettingAAD(ws.ID().String(), crypto.FieldEmbeddingKey))
 	if err != nil {
 		h.fail(w, "sealing embedding key", err)
 		return
@@ -278,7 +278,7 @@ func (h *WorkspaceHandler) SetNotifications(w http.ResponseWriter, r *http.Reque
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		if sealed, err = h.cipher.Encrypt(req.WebhookURL); err != nil {
+		if sealed, err = h.cipher.Seal(req.WebhookURL, crypto.SettingAAD(ws.ID().String(), crypto.FieldNotifyWebhook)); err != nil {
 			h.fail(w, "sealing webhook url", err)
 			return
 		}
@@ -330,7 +330,7 @@ func (h *WorkspaceHandler) SetOnCall(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "the on-call credential or schedule was rejected"})
 			return
 		}
-		if sealed, err = h.cipher.Encrypt(req.APIKey); err != nil {
+		if sealed, err = h.cipher.Seal(req.APIKey, crypto.SettingAAD(ws.ID().String(), crypto.FieldOnCallKey)); err != nil {
 			h.fail(w, "sealing on-call key", err)
 			return
 		}

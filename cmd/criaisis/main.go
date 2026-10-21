@@ -15,7 +15,6 @@ import (
 	"criaisis/internal/database"
 	"criaisis/internal/domain/entity"
 	"criaisis/internal/handler"
-	"criaisis/internal/infrastructure/crypto"
 	"criaisis/internal/infrastructure/postgres"
 	"criaisis/internal/infrastructure/slack"
 	"criaisis/internal/router"
@@ -35,6 +34,7 @@ const shutdownTimeout = 30 * time.Second
 
 func main() {
 	migrateOnly := flag.Bool("migrate-only", false, "apply database migrations and exit")
+	rotate := flag.Bool("rotate-credentials", false, "re-seal every stored credential under the current key, then exit")
 	flag.Parse()
 
 	logger := newLogger()
@@ -56,7 +56,7 @@ func main() {
 		return
 	}
 
-	cipher, err := crypto.New(cfg.Security.CredentialEncryptionKey)
+	cipher, err := cfg.Security.Cipher()
 	if err != nil {
 		logger.Fatal().Err(err).Msg("invalid credential encryption key")
 	}
@@ -64,6 +64,16 @@ func main() {
 	srv, err := server.New(cfg, &logger)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("could not start server container")
+	}
+
+	if *rotate {
+		n, err := postgres.RewrapCredentials(ctx, srv.DB.Pool, cipher)
+		if err != nil {
+			logger.Fatal().Err(err).Msg("credential rotation failed; nothing was changed")
+		}
+		logger.Info().Int("rewrapped", n).Msg("credentials re-sealed under the current key")
+		_ = srv.DB.Close()
+		return
 	}
 
 	repos := newRepositories(srv)

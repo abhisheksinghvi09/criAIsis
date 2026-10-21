@@ -4,7 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+
+	"criaisis/internal/infrastructure/crypto"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/knadh/koanf/providers/confmap"
@@ -14,20 +17,21 @@ import (
 // defaults cover every value that has a single sane setting, so a local developer
 // only has to supply credentials and the database host.
 var defaults = map[string]any{
-	"primary.env":                 "local",
-	"server.port":                 "8080",
-	"server.read_timeout":         15,
-	"server.write_timeout":        30,
-	"server.idle_timeout":         60,
-	"llm.specialist_model":        "claude-opus-5",
-	"llm.synthesis_model":         "claude-opus-5",
-	"llm.embedding_model":         "text-embedding-3-small",
-	"llm.embedding_base_url":      "https://api.openai.com/v1",
-	"database.ssl_mode":           "disable",
-	"database.max_open_conns":     25,
-	"database.max_idle_conns":     5,
-	"database.conn_max_lifetime":  3600,
-	"database.conn_max_idle_time": 900,
+	"primary.env":                           "local",
+	"server.port":                           "8080",
+	"server.read_timeout":                   15,
+	"server.write_timeout":                  30,
+	"server.idle_timeout":                   60,
+	"llm.specialist_model":                  "claude-opus-5",
+	"llm.synthesis_model":                   "claude-opus-5",
+	"llm.embedding_model":                   "text-embedding-3-small",
+	"llm.embedding_base_url":                "https://api.openai.com/v1",
+	"database.ssl_mode":                     "disable",
+	"security.credential_encryption_key_id": 1,
+	"database.max_open_conns":               25,
+	"database.max_idle_conns":               5,
+	"database.conn_max_lifetime":            3600,
+	"database.conn_max_idle_time":           900,
 }
 
 // EnvPrefix defines the global namespace for all environment variables.
@@ -64,12 +68,19 @@ type ServerConfig struct {
 
 // SecurityConfig holds the platform's own secrets.
 //
-// CredentialEncryptionKey protects every tenant credential at rest; rotating it
-// makes previously stored keys unreadable. AdminAPIKey is the bootstrap
+// CredentialEncryptionKey protects every tenant credential at rest. It is either
+// 32 raw characters or "base64:" plus 32 encoded random bytes (preferred). To
+// rotate: give the new key a new CredentialEncryptionKeyID, move the old one into
+// PreviousEncryptionKeys as "<id>:<key>", deploy, run `criaisis
+// -rotate-credentials`, then drop the old key. AdminAPIKey is the bootstrap
 // credential that may create workspaces, and nothing else.
 type SecurityConfig struct {
-	CredentialEncryptionKey string `koanf:"credential_encryption_key" validate:"required,len=32"`
-	AdminAPIKey             string `koanf:"admin_api_key" validate:"required,min=24"`
+	CredentialEncryptionKey   string `koanf:"credential_encryption_key" validate:"required"`
+	CredentialEncryptionKeyID int    `koanf:"credential_encryption_key_id" validate:"gte=1,lte=255"`
+	// PreviousEncryptionKeys is "<id>:<key>,<id>:<key>": keys that can still open
+	// older values until they are rewrapped. Keys must not contain a comma.
+	PreviousEncryptionKeys string `koanf:"previous_encryption_keys"`
+	AdminAPIKey            string `koanf:"admin_api_key" validate:"required,min=24"`
 }
 
 // FeaturesConfig switches off work that is not production-ready.
@@ -138,8 +149,8 @@ func LoadConfigFromEnviron(environ []string) (*Config, error) {
 	// the tag and then fail at cipher construction instead of here, with a less
 	// useful error. Check the byte length explicitly for the same fail-fast
 	// guarantee the rest of this function promises.
-	if n := len(mainConfig.Security.CredentialEncryptionKey); n != 32 {
-		return nil, fmt.Errorf("config validation failed: credential_encryption_key must be exactly 32 bytes, got %d", n)
+	if _, err := mainConfig.Security.Cipher(); err != nil {
+		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
 
 	// database.ssl_mode defaults to "disable" for local dev convenience, but
@@ -186,4 +197,22 @@ func parseEnvVar(envStr string) (key string, val any, ok bool) {
 		return key, origins, true
 	}
 	return key, raw, true
+}
+
+// Cipher builds the credential keyring from the configured keys.
+func (s SecurityConfig) Cipher() (*crypto.Cipher, error) {
+	previous := map[int]string{}
+	for _, entry := range strings.Split(s.PreviousEncryptionKeys, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		rawID, key, ok := strings.Cut(entry, ":")
+		id, err := strconv.Atoi(rawID)
+		if !ok || err != nil {
+			return nil, fmt.Errorf("previous_encryption_keys entry must be <id>:<key>")
+		}
+		previous[id] = key
+	}
+	return crypto.NewKeyring(s.CredentialEncryptionKeyID, s.CredentialEncryptionKey, previous)
 }

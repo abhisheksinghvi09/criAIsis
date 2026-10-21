@@ -170,7 +170,7 @@ func (h *SlackInboundHandler) HandleOAuthCallback(w http.ResponseWriter, r *http
 		return
 	}
 
-	encryptedToken, err := h.crypto.Encrypt(res.AccessToken)
+	encryptedToken, err := h.crypto.Seal(res.AccessToken, crypto.BotTokenAAD(res.Team.ID))
 	if err != nil {
 		h.log.Error().Err(err).Msg("failed encrypting slack bot token")
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "encryption failed"})
@@ -572,7 +572,7 @@ func (h *SlackInboundHandler) handleAppMention(
 		}
 
 		// Decrypt bot token and post response in-thread
-		decryptedToken, err := h.crypto.Decrypt(ws.SlackBotTokenEncrypted())
+		decryptedToken, err := h.crypto.Open(ws.SlackBotTokenEncrypted(), crypto.BotTokenAAD(ws.SlackTeamID()))
 		if err != nil {
 			h.log.Error().Err(err).Msg("failed decrypting bot token for reply")
 			return

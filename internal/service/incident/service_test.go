@@ -219,9 +219,9 @@ func newTestServiceWith(t *testing.T, queue job.Queue, chat llm.ChatProvider, mu
 	if err != nil {
 		t.Fatalf("building settings: %v", err)
 	}
-	llmKey, _ := cipher.Encrypt("sk-ant-key")
+	llmKey, _ := cipher.Seal("sk-ant-key", crypto.SettingAAD(wsID.String(), crypto.FieldLLMKey))
 	_ = settings.SetLLM("anthropic", llmKey, "claude-opus-5", "claude-opus-5")
-	embedKey, _ := cipher.Encrypt("sk-embed-key")
+	embedKey, _ := cipher.Seal("sk-embed-key", crypto.SettingAAD(wsID.String(), crypto.FieldEmbeddingKey))
 	_ = settings.SetEmbeddings("openai", embedKey, "text-embedding-3-small", "https://api.openai.com/v1")
 	if mutate != nil {
 		mutate(settings)

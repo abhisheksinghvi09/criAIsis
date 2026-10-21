@@ -59,13 +59,13 @@ func (l fixedLister) OnCallEmails(context.Context) ([]string, error) { return l,
 func setup(t *testing.T, botToken string) (*Service, *fakeSlack, *entity.Incident, *entity.WorkspaceSettings) {
 	t.Helper()
 	cipher, _ := crypto.New("01234567890123456789012345678901")
-	sealedTok, _ := cipher.Encrypt(botToken)
+	sealedTok, _ := cipher.Seal(botToken, crypto.BotTokenAAD("T1"))
 	ws, err := entity.NewWorkspace("T1", "Team", sealedTok)
 	if err != nil {
 		t.Fatal(err)
 	}
 	settings, _ := entity.NewWorkspaceSettings(ws.ID(), entity.SettingsDefaults{})
-	key, _ := cipher.Encrypt("pd-key")
+	key, _ := cipher.Seal("pd-key", crypto.SettingAAD(ws.ID().String(), crypto.FieldOnCallKey))
 	if err := settings.SetOnCall("pagerduty", key, "SCHED"); err != nil {
 		t.Fatal(err)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"criaisis/internal/config"
@@ -12,6 +13,7 @@ import (
 	"criaisis/internal/domain/value"
 	"criaisis/internal/infrastructure/postgres"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 )
@@ -36,6 +38,39 @@ func getTestPool(t *testing.T) *pgxpool.Pool {
 		t.Skipf("skipping integration test, cannot connect to database: %v", err)
 	}
 
+	return db.Pool
+}
+
+// isolatedPool gives a test its own freshly migrated database, dropped afterwards.
+// Use it for anything that acts on every row (key rotation, orphan recovery), so
+// a test can never touch a developer's data in the shared database.
+func isolatedPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	admin := getTestPool(t)
+	defer admin.Close()
+
+	cfg, _ := config.LoadConfig()
+	name := "criaisis_test_" + strings.ReplaceAll(uuid.NewString()[:8], "-", "")
+	ctx := context.Background()
+	if _, err := admin.Exec(ctx, "CREATE DATABASE "+name); err != nil {
+		t.Skipf("cannot create an isolated database: %v", err)
+	}
+
+	cfg.Database.Name = name
+	logger := zerolog.Nop()
+	if err := database.Migrate(ctx, &logger, cfg); err != nil {
+		t.Fatalf("migrating isolated database: %v", err)
+	}
+	db, err := database.New(cfg, &logger)
+	if err != nil {
+		t.Fatalf("connecting to isolated database: %v", err)
+	}
+	t.Cleanup(func() {
+		db.Pool.Close()
+		cleanup := getTestPool(t)
+		defer cleanup.Close()
+		_, _ = cleanup.Exec(context.Background(), "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)")
+	})
 	return db.Pool
 }
 

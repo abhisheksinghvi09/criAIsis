@@ -63,7 +63,7 @@ func fullyConfiguredSettings(t *testing.T, cipher *crypto.Cipher, wsID value.Wor
 		t.Fatalf("building settings: %v", err)
 	}
 
-	llmKey, err := cipher.Encrypt("sk-ant-tenant-key")
+	llmKey, err := cipher.Seal("sk-ant-tenant-key", crypto.SettingAAD(wsID.String(), crypto.FieldLLMKey))
 	if err != nil {
 		t.Fatalf("sealing llm key: %v", err)
 	}
@@ -71,7 +71,7 @@ func fullyConfiguredSettings(t *testing.T, cipher *crypto.Cipher, wsID value.Wor
 		t.Fatalf("SetLLM: %v", err)
 	}
 
-	embedKey, err := cipher.Encrypt("sk-embed-tenant-key")
+	embedKey, err := cipher.Seal("sk-embed-tenant-key", crypto.SettingAAD(wsID.String(), crypto.FieldEmbeddingKey))
 	if err != nil {
 		t.Fatalf("sealing embedding key: %v", err)
 	}
@@ -79,7 +79,7 @@ func fullyConfiguredSettings(t *testing.T, cipher *crypto.Cipher, wsID value.Wor
 		t.Fatalf("SetEmbeddings: %v", err)
 	}
 
-	webhook, err := cipher.Encrypt("https://hooks.slack.com/services/T/B/x")
+	webhook, err := cipher.Seal("https://hooks.slack.com/services/T/B/x", crypto.SettingAAD(wsID.String(), crypto.FieldNotifyWebhook))
 	if err != nil {
 		t.Fatalf("sealing webhook url: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestResolveEmbedder_SucceedsWithOnlyAnEmbeddingKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("building settings: %v", err)
 	}
-	embedKey, err := cipher.Encrypt("sk-embed-tenant-key")
+	embedKey, err := cipher.Seal("sk-embed-tenant-key", crypto.SettingAAD(wsID.String(), crypto.FieldEmbeddingKey))
 	if err != nil {
 		t.Fatalf("sealing embedding key: %v", err)
 	}

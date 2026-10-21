@@ -44,7 +44,11 @@ type queueFixture struct {
 
 func newQueueFixture(t *testing.T, tenants int) *queueFixture {
 	t.Helper()
-	pool := getTestPool(t)
+	return newQueueFixtureOn(t, getTestPool(t), tenants)
+}
+
+func newQueueFixtureOn(t *testing.T, pool *pgxpool.Pool, tenants int) *queueFixture {
+	t.Helper()
 	f := &queueFixture{pool: pool}
 	repo := postgres.NewWorkspaceRepository(pool)
 	for i := 0; i < tenants; i++ {
@@ -394,7 +398,8 @@ func TestJobQueue_PerTenantCapIsNeverExceeded(t *testing.T) {
 func ptrLog() *zerolog.Logger { l := zerolog.Nop(); return &l }
 
 func TestRecoverOrphaned_RequeuesLostWorkAndLeavesFinishedInvestigationsAlone(t *testing.T) {
-	f := newQueueFixture(t, 1)
+	// Recovery acts on every incident, so it gets a database of its own.
+	f := newQueueFixtureOn(t, isolatedPool(t), 1)
 	ctx := context.Background()
 	exec := func(sql string, args ...any) {
 		t.Helper()
@@ -417,9 +422,8 @@ func TestRecoverOrphaned_RequeuesLostWorkAndLeavesFinishedInvestigationsAlone(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Other test data in the same database may also be recovered; assert on ours.
-	if requeued < 1 || failed < 1 {
-		t.Errorf("requeued=%d failed=%d, want at least 1 each", requeued, failed)
+	if requeued != 1 || failed != 1 {
+		t.Errorf("requeued=%d failed=%d, want 1 and 1", requeued, failed)
 	}
 
 	statusOf := func(id uuid.UUID) string {

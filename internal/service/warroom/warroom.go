@@ -112,7 +112,7 @@ func (s *Service) botToken(ctx context.Context, inc *entity.Incident) (string, e
 	if err != nil || ws == nil {
 		return "", fmt.Errorf("loading workspace: %w", err)
 	}
-	token, err := s.cipher.Decrypt(ws.SlackBotTokenEncrypted())
+	token, err := s.cipher.Open(ws.SlackBotTokenEncrypted(), crypto.BotTokenAAD(ws.SlackTeamID()))
 	if err != nil {
 		return "", fmt.Errorf("decrypting bot token: %w", err)
 	}
@@ -143,7 +143,7 @@ func (s *Service) people(ctx context.Context, token string, inc *entity.Incident
 	if err != nil || provider == oncall.ProviderNone {
 		return ids
 	}
-	key, err := s.cipher.Decrypt(settings.OnCallAPIKeyEncrypted())
+	key, err := s.cipher.Open(settings.OnCallAPIKeyEncrypted(), crypto.SettingAAD(settings.WorkspaceID().String(), crypto.FieldOnCallKey))
 	if err != nil {
 		s.log.Error().Err(err).Msg("decrypting on-call api key")
 		return ids

@@ -98,7 +98,7 @@ func (r *Resolver) ResolveEmbedder(ctx context.Context, wsID value.WorkspaceID) 
 
 // chatFor builds the tenant's debate client from their own key.
 func (r *Resolver) chatFor(s *entity.WorkspaceSettings) (llm.ChatProvider, error) {
-	key, err := r.cipher.Decrypt(s.LLMAPIKeyEncrypted())
+	key, err := r.cipher.Open(s.LLMAPIKeyEncrypted(), crypto.SettingAAD(s.WorkspaceID().String(), crypto.FieldLLMKey))
 	if err != nil {
 		return nil, fmt.Errorf("decrypting model api key: %w", err)
 	}
@@ -111,7 +111,7 @@ func (r *Resolver) chatFor(s *entity.WorkspaceSettings) (llm.ChatProvider, error
 
 // embedderFor builds the tenant's retrieval client from their own key.
 func (r *Resolver) embedderFor(s *entity.WorkspaceSettings) (llm.EmbeddingProvider, error) {
-	key, err := r.cipher.Decrypt(s.EmbeddingAPIKeyEncrypted())
+	key, err := r.cipher.Open(s.EmbeddingAPIKeyEncrypted(), crypto.SettingAAD(s.WorkspaceID().String(), crypto.FieldEmbeddingKey))
 	if err != nil {
 		return nil, fmt.Errorf("decrypting embedding api key: %w", err)
 	}
@@ -133,7 +133,7 @@ func (r *Resolver) notifierFor(s *entity.WorkspaceSettings) (notify.Notifier, er
 		return notify.Discard{}, nil
 	}
 
-	webhookURL, err := r.cipher.Decrypt(s.NotifyWebhookEncrypted())
+	webhookURL, err := r.cipher.Open(s.NotifyWebhookEncrypted(), crypto.SettingAAD(s.WorkspaceID().String(), crypto.FieldNotifyWebhook))
 	if err != nil {
 		return nil, fmt.Errorf("decrypting webhook url: %w", err)
 	}
